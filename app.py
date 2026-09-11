@@ -405,9 +405,9 @@ def next_object_name(object_type: str) -> str:
                 numbers.append(int(name.removeprefix(f"{prefix} ")))
             except ValueError:
                 pass
-    counters = st.session_state.setdefault("object_name_counters", {})
-    next_number = max(counters.get(object_type, 0), max(numbers, default=0)) + 1
-    counters[object_type] = next_number
+    # Count saved objects only. Opening a form and switching its type must not
+    # consume a number from either object's independent sequence.
+    next_number = max(numbers, default=0) + 1
     return f"{object_type.lower()} {next_number}"
 
 
