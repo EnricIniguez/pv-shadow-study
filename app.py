@@ -1,10 +1,27 @@
 import pandas as pd
 import folium
 import streamlit as st
+from branca.element import MacroElement
 from folium.plugins import Fullscreen
+from jinja2 import Template
 from streamlit_folium import st_folium
 
 from solar_data import generate_annual_solar_data
+
+
+class SyncDraggedMarker(MacroElement):
+    """Forward a Folium marker's drag-end position as a map click event."""
+
+    _template = Template(
+        """
+        {% macro script(this, kwargs) %}
+        {{ this._parent.get_name() }}.on('dragend', function(event) {
+            const position = event.target.getLatLng();
+            {{ this._parent._parent.get_name() }}.fire('click', {latlng: position});
+        });
+        {% endmacro %}
+        """
+    )
 
 
 st.set_page_config(page_title="PV Shadow Study", page_icon="☀️", layout="wide")
@@ -61,7 +78,7 @@ map_col, summary_col = st.columns([1.4, 1])
 
 with map_col:
     st.subheader("Select the study location")
-    st.caption("Click the satellite map to update the coordinates.")
+    st.caption("Click the map to reposition the marker, or drag it for fine adjustment.")
     location_map = folium.Map(
         location=[latitude, longitude],
         zoom_start=17,
@@ -74,11 +91,14 @@ with map_col:
         name="Satellite",
         overlay=False,
     ).add_to(location_map)
-    folium.Marker(
+    location_marker = folium.Marker(
         [latitude, longitude],
-        tooltip=f"{latitude:.6f}, {longitude:.6f}",
+        tooltip="Drag to fine-tune the study location",
         icon=folium.Icon(color="green", icon="crosshairs", prefix="fa"),
-    ).add_to(location_map)
+        draggable=True,
+    )
+    location_marker.add_child(SyncDraggedMarker())
+    location_marker.add_to(location_map)
     Fullscreen(position="topright").add_to(location_map)
     map_state = st_folium(
         location_map,
