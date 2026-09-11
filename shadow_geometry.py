@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
 from math import cos, pi, radians
 
 import numpy as np
-from shapely.geometry import LineString, MultiPolygon, Polygon
+from shapely.geometry import GeometryCollection, LineString, MultiPolygon, Polygon
 from shapely.ops import unary_union
 
 from object_geometry import cuboid_vertices
@@ -81,12 +80,15 @@ def turbine_shadow_polygons(item: dict, elevation: float, azimuth: float, ref_la
     radius = item["blade_length_m"]
     hub_height = item["mast_height_m"]
     # The north-facing rotor lies in the local East/Up plane.
-    rotor_points = []
-    for angle in angles:
-        point_east = east + radius * np.cos(angle)
-        point_height = hub_height + radius * np.sin(angle)
-        displacement = shadow_shift(point_height, elevation, azimuth)
-        rotor_points.append((point_east + displacement[0], north + displacement[1]))
+    point_east = east + radius * np.cos(angles)
+    point_height = hub_height + radius * np.sin(angles)
+    elevation_rad = radians(elevation)
+    azimuth_rad = radians(azimuth)
+    horizontal_per_vertical = 1.0 / np.tan(elevation_rad)
+    rotor_points = np.column_stack((
+        point_east - point_height * np.sin(azimuth_rad) * horizontal_per_vertical,
+        north - point_height * np.cos(azimuth_rad) * horizontal_per_vertical,
+    ))
     return mast, Polygon(rotor_points).convex_hull
 
 
@@ -98,17 +100,22 @@ def _union_in_batches(polygons: list[Polygon], batch_size: int = 600) -> Polygon
     return unary_union(batches)
 
 
+def _swept_hull(first: Polygon, second: Polygon) -> Polygon:
+    """Return the convex swept envelope without performing an expensive union."""
+    return GeometryCollection((first, second)).convex_hull
+
+
 def soften_envelope_boundary(geometry, interval_minutes: int, flicker: bool = False):
     """Generalize a display boundary into logical straight-line segments.
 
     The exact union remains available for area calculations.  This display
-    geometry removes the small saw-tooth vertices created by discrete solar
-    samples, with a tolerance proportional to the selected time interval.
+    geometry removes insignificant sub-metre vertices after the azimuth-extreme
+    envelope is built. The same tolerance is used for every study time step so
+    the displayed restriction boundary remains consistent.
     """
     if geometry.is_empty:
         return geometry
-    factor = 0.9 if flicker else 0.45
-    tolerance_m = max(0.25, min(14.0, interval_minutes * factor))
+    tolerance_m = 4.0 if flicker else 2.0
     softened = geometry.simplify(tolerance_m, preserve_topology=True)
     return softened if softened.is_valid else softened.buffer(0)
 
@@ -117,11 +124,11 @@ def annual_shadow_envelopes(
     objects: list[dict], solar_data, reference_latitude: float,
     reference_longitude: float, boundary_solar_data=None,
 ):
-    """Calculate continuous annual solid-shadow and flicker-risk envelopes.
+    """Calculate annual envelopes from geometry-defining solar extremes.
 
-    Consecutive projected polygons are joined by their swept convex envelope.
-    This represents the continuous movement between samples without bridging
-    across irradiance-filtered periods or night-time gaps.
+    Every timestamp is filtered for sun position and irradiance, but only the
+    minimum and maximum solar elevations in narrow azimuth sectors can define
+    the external envelope. Interior, redundant projections are skipped.
     """
     relevant = solar_data[
         solar_data["above_ghi_threshold"]
@@ -136,12 +143,12 @@ def annual_shadow_envelopes(
     ]
     solid_polygons: list[Polygon] = []
     rotor_polygons: list[Polygon] = []
-    if len(solar_data.index) > 1:
-        nominal_step_seconds = (
-            solar_data.index[1] - solar_data.index[0]
-        ).total_seconds()
-    else:
-        nominal_step_seconds = 0.0
+    azimuth_bin_degrees = 0.25
+    envelope_rows = boundary_relevant[["apparent_elevation", "azimuth"]].copy()
+    envelope_rows["azimuth_bin"] = np.floor(
+        envelope_rows["azimuth"] / azimuth_bin_degrees
+    ).astype(int)
+    grouped_rows = list(envelope_rows.groupby("azimuth_bin", sort=True))
 
     for item in objects:
         def project(row):
@@ -158,90 +165,52 @@ def annual_shadow_envelopes(
                 None,
             )
 
-        previous_time = None
-        previous_solid = None
-        previous_rotor = None
-        for row in relevant.itertuples():
-            current_solid, current_rotor = project(row)
+        previous_bin = None
+        previous_solid_section = None
+        previous_rotor_section = None
+        first_section = None
+        last_section = None
 
-            current_time = row.Index
-            contiguous = (
-                previous_time is not None
-                and nominal_step_seconds > 0
-                and (current_time - previous_time).total_seconds()
-                <= nominal_step_seconds * 1.05
+        for azimuth_bin, rows in grouped_rows:
+            low_row = rows.loc[rows["apparent_elevation"].idxmin()]
+            high_row = rows.loc[rows["apparent_elevation"].idxmax()]
+            low_solid, low_rotor = project(low_row)
+            high_solid, high_rotor = project(high_row)
+            solid_section = _swept_hull(low_solid, high_solid)
+            rotor_section = (
+                _swept_hull(low_rotor, high_rotor)
+                if low_rotor is not None and high_rotor is not None else None
             )
-            if contiguous:
-                # The convex hull of two consecutive convex projections is the
-                # conservative swept area between them, removing serrated gaps.
-                solid_polygons.append(
-                    unary_union([previous_solid, current_solid]).convex_hull
-                )
-                if current_rotor is not None and previous_rotor is not None:
-                    rotor_polygons.append(
-                        unary_union([previous_rotor, current_rotor]).convex_hull
-                    )
-            else:
-                solid_polygons.append(current_solid)
-                if current_rotor is not None:
-                    rotor_polygons.append(current_rotor)
+            solid_polygons.append(solid_section)
+            if rotor_section is not None:
+                rotor_polygons.append(rotor_section)
 
-            previous_time = current_time
-            previous_solid = current_solid
-            previous_rotor = current_rotor
+            if previous_bin is not None and azimuth_bin - previous_bin <= 1:
+                solid_polygons.append(_swept_hull(
+                    previous_solid_section, solid_section
+                ))
+                if previous_rotor_section is not None and rotor_section is not None:
+                    rotor_polygons.append(_swept_hull(
+                        previous_rotor_section, rotor_section
+                    ))
 
-        # Derive daily edge anchors from the refined boundary time series.
-        # This prevents 15-minute threshold crossings from jumping between
-        # quarter-hour slots and producing a repeating annual saw-tooth.
-        daily_endpoints = {}
-        solar_days = [
-            (timestamp + timedelta(hours=reference_longitude / 15.0)).date()
-            for timestamp in boundary_relevant.index
-        ]
-        for solar_day, day_rows in boundary_relevant.groupby(solar_days):
-            first_row = next(day_rows.iloc[[0]].itertuples())
-            last_row = next(day_rows.iloc[[-1]].itertuples())
-            peak_index = day_rows["apparent_elevation"].argmax()
-            peak_row = next(day_rows.iloc[[peak_index]].itertuples())
-            first_solid, first_rotor = project(first_row)
-            last_solid, last_rotor = project(last_row)
-            peak_solid, peak_rotor = project(peak_row)
-            daily_endpoints[solar_day] = {
-                "first_solid": first_solid,
-                "last_solid": last_solid,
-                "first_rotor": first_rotor,
-                "last_rotor": last_rotor,
-                "peak_solid": peak_solid,
-                "peak_rotor": peak_rotor,
-            }
+            if first_section is None:
+                first_section = (azimuth_bin, solid_section, rotor_section)
+            last_section = (azimuth_bin, solid_section, rotor_section)
+            previous_bin = azimuth_bin
+            previous_solid_section = solid_section
+            previous_rotor_section = rotor_section
 
-        # Join like-for-like daily endpoints. This removes the annual row of
-        # daily teeth without ever drawing a bridge from evening to morning.
-        ordered_days = sorted(daily_endpoints)
-        for previous_day, current_day in zip(ordered_days, ordered_days[1:]):
-            if (current_day - previous_day).days != 1:
-                continue
-            previous = daily_endpoints[previous_day]
-            current = daily_endpoints[current_day]
-            solid_polygons.append(unary_union([
-                previous["first_solid"], current["first_solid"]
-            ]).convex_hull)
-            solid_polygons.append(unary_union([
-                previous["last_solid"], current["last_solid"]
-            ]).convex_hull)
-            solid_polygons.append(unary_union([
-                previous["peak_solid"], current["peak_solid"]
-            ]).convex_hull)
-            if previous["first_rotor"] is not None and current["first_rotor"] is not None:
-                rotor_polygons.append(unary_union([
-                    previous["first_rotor"], current["first_rotor"]
-                ]).convex_hull)
-                rotor_polygons.append(unary_union([
-                    previous["last_rotor"], current["last_rotor"]
-                ]).convex_hull)
-                rotor_polygons.append(unary_union([
-                    previous["peak_rotor"], current["peak_rotor"]
-                ]).convex_hull)
+        # Join across North only when occupied bins are genuinely adjacent
+        # around the 0°/360° boundary (relevant for polar-day locations).
+        total_bins = round(360.0 / azimuth_bin_degrees)
+        if (
+            first_section is not None and last_section is not None
+            and first_section[0] + total_bins - last_section[0] <= 1
+        ):
+            solid_polygons.append(_swept_hull(last_section[1], first_section[1]))
+            if last_section[2] is not None and first_section[2] is not None:
+                rotor_polygons.append(_swept_hull(last_section[2], first_section[2]))
     solid = _union_in_batches(solid_polygons)
     rotor = _union_in_batches(rotor_polygons)
     flicker_only = rotor.difference(solid) if not rotor.is_empty else rotor
