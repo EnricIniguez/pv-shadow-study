@@ -27,15 +27,39 @@ class SyncDraggedMarker(MacroElement):
     )
 
 
-def open_page(page_name: str) -> None:
-    st.session_state.active_page = page_name
+PAGES = ("Site", "Objects", "Shadow study", "Export")
 
 
-st.set_page_config(page_title="PV Shadow Study", page_icon="☀️", layout="wide")
+def render_navigation(home: bool = False) -> None:
+    """Render the pastel workflow navigation."""
+    links = [
+        ("Site", "📍", "site"),
+        ("Objects", "🧊", "objects"),
+        ("Shadow study", "🌤️", "shadow"),
+        ("Export", "📦", "export"),
+    ]
+    size_class = " home" if home else ""
+    items = "".join(
+        f'<a class="{css_class}" href="?page={label.replace(" ", "%20")}">'
+        f'<span>{icon}</span>{label}</a>'
+        for label, icon, css_class in links
+    )
+    st.markdown(f'<nav class="pv-nav{size_class}">{items}</nav>', unsafe_allow_html=True)
+
+
+st.set_page_config(page_title="PV Butterfly", page_icon="🦋", layout="wide")
 st.markdown(
     """
     <style>
-        .stApp { background: #ffffff; color: #0b2942; }
+        .stApp {
+            color: #16324a;
+            background-color: #fffdf9;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 600 500'%3E%3Cg fill='%23d8c3a5' fill-opacity='.13'%3E%3Cellipse cx='180' cy='175' rx='125' ry='155' transform='rotate(-28 180 175)'/%3E%3Cellipse cx='420' cy='175' rx='125' ry='155' transform='rotate(28 420 175)'/%3E%3Cellipse cx='205' cy='355' rx='90' ry='115' transform='rotate(24 205 355)'/%3E%3Cellipse cx='395' cy='355' rx='90' ry='115' transform='rotate(-24 395 355)'/%3E%3Cellipse cx='300' cy='270' rx='23' ry='175'/%3E%3C/g%3E%3C/svg%3E");
+            background-position: center 58%;
+            background-repeat: no-repeat;
+            background-size: min(56vw, 680px);
+            background-attachment: fixed;
+        }
         [data-testid="stSidebar"] { background: #f3f8f5; }
         [data-testid="stMetric"] {
             background: #f3f8f5; border: 1px solid #d8e8df;
@@ -44,16 +68,51 @@ st.markdown(
         .stButton > button, .stDownloadButton > button {
             border-radius: 0.65rem; font-weight: 650;
         }
-        div[data-testid="stHorizontalBlock"] .stButton > button {
-            min-height: 7rem; font-size: 1.25rem;
+        .pv-nav {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: .75rem;
+            margin: .5rem 0 1.5rem;
+        }
+        .pv-nav a {
+            min-height: 3.4rem;
+            padding: .75rem;
+            border-radius: .8rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: .55rem;
+            color: #16324a !important;
+            font-weight: 700;
+            text-decoration: none !important;
+            border: 1px solid rgba(22, 50, 74, .12);
+            box-shadow: 0 3px 12px rgba(22, 50, 74, .06);
+            transition: transform .15s ease, box-shadow .15s ease;
+        }
+        .pv-nav a:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 18px rgba(22, 50, 74, .12);
+        }
+        .pv-nav.home {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .pv-nav.home a {
+            min-height: 8rem;
+            font-size: 1.3rem;
+        }
+        .pv-nav a span { font-size: 1.35em; }
+        .pv-nav .site { background: #cfe8dc; }
+        .pv-nav .objects { background: #d9e5f2; }
+        .pv-nav .shadow { background: #f7dfb9; }
+        .pv-nav .export { background: #eadcf0; }
+        @media (max-width: 720px) {
+            .pv-nav, .pv-nav.home { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-if "active_page" not in st.session_state:
-    st.session_state.active_page = "Home"
 if "latitude" not in st.session_state:
     st.session_state.latitude = 41.3874
 if "longitude" not in st.session_state:
@@ -64,23 +123,21 @@ if "pending_coordinates" in st.session_state:
     st.session_state.longitude = pending_longitude
 
 
-if st.session_state.active_page == "Home":
-    st.title("PV Shadow Study")
-    st.caption("Select a study area to begin")
+active_page = st.query_params.get("page", "Home")
+if active_page not in (*PAGES, "Home"):
+    active_page = "Home"
 
-    first_col, second_col = st.columns(2)
-    with first_col:
-        st.button("📍  Site", width="stretch", on_click=open_page, args=("Site",))
-        st.button("🌤️  Shadow study", width="stretch", on_click=open_page, args=("Shadow study",))
-    with second_col:
-        st.button("🧊  Objects", width="stretch", on_click=open_page, args=("Objects",))
-        st.button("📦  Export", width="stretch", on_click=open_page, args=("Export",))
+
+if active_page == "Home":
+    st.title("PV Butterfly")
+    st.caption("Select a study area to begin")
+    render_navigation(home=True)
 
     with st.expander("Instructions"):
         st.caption("Instructions will be added as the workflow is developed.")
 
-elif st.session_state.active_page == "Site":
-    st.button("← Main page", on_click=open_page, args=("Home",))
+elif active_page == "Site":
+    render_navigation()
     st.title("Site")
     st.caption("Representative annual clear-sky study for the selected location")
 
@@ -191,14 +248,6 @@ elif st.session_state.active_page == "Site":
         )
         st.altair_chart(heatmap, width="stretch")
 
-        with st.expander("Preview calculated data"):
-            st.dataframe(data.head(100), width="stretch")
-        st.download_button(
-            "Download annual CSV",
-            data=data.to_csv().encode("utf-8"),
-            file_name=f"clear_sky_{latitude:.4f}_{longitude:.4f}_{resolution}min.csv",
-            mime="text/csv",
-        )
         offset_label = f"UTC{utc_offset:+g}"
         st.caption(
             f"Time basis: local standard time ({timezone_name}, {offset_label}). "
@@ -206,11 +255,11 @@ elif st.session_state.active_page == "Site":
         )
 
 else:
-    st.button("← Main page", on_click=open_page, args=("Home",))
-    st.title(st.session_state.active_page)
+    render_navigation()
+    st.title(active_page)
     placeholder_text = {
         "Objects": "Object definition will be added in the next development step.",
         "Shadow study": "Shadow calculations will be added after the object definition.",
         "Export": "KMZ and DWG export options will be added in a later step.",
     }
-    st.info(placeholder_text[st.session_state.active_page])
+    st.info(placeholder_text[active_page])
