@@ -27,24 +27,51 @@ class SyncDraggedMarker(MacroElement):
     )
 
 
-PAGES = ("Site", "Objects", "Shadow study", "Export")
+PAGES = ("Site Creation", "Object Generation", "Shadow Study", "Export Results")
 
 
 def render_navigation(home: bool = False) -> None:
     """Render the pastel workflow navigation."""
+    site_complete = st.session_state.get("site_completed", False)
+    object_complete = st.session_state.get("object_completed", False)
+    shadow_complete = st.session_state.get("shadow_completed", False)
+    export_unlocked = site_complete and object_complete and shadow_complete
     links = [
-        ("Site", "📍", "site"),
-        ("Objects", "🧊", "objects"),
-        ("Shadow study", "🌤️", "shadow"),
-        ("Export", "📦", "export"),
+        ("Site Creation", "📍", "site", site_complete, True),
+        ("Object Generation", "🧊", "objects", object_complete, True),
+        ("Shadow Study", "🌤️", "shadow", shadow_complete, True),
+        ("Export Results", "📦", "export", export_unlocked, export_unlocked),
     ]
     size_class = " home" if home else ""
-    items = "".join(
-        f'<a class="{css_class}" href="?page={label.replace(" ", "%20")}" target="_self">'
-        f'<span>{icon}</span>{label}</a>'
-        for label, icon, css_class in links
+    items = []
+    for label, icon, css_class, completed, enabled in links:
+        status = "😊" if completed else "☹️"
+        content = (
+            f'<span class="nav-icon">{icon}</span><span class="nav-label">{label}</span>'
+            f'<span class="nav-status" title="{"Completed" if completed else "Not completed"}">{status}</span>'
+        )
+        if enabled:
+            items.append(
+                f'<a class="{css_class}" href="?page={label.replace(" ", "%20")}" '
+                f'target="_self">{content}</a>'
+            )
+        else:
+            items.append(f'<div class="{css_class} disabled">{content}</div>')
+    st.markdown(
+        f'<nav class="pv-nav{size_class}">{"".join(items)}</nav>',
+        unsafe_allow_html=True,
     )
-    st.markdown(f'<nav class="pv-nav{size_class}">{items}</nav>', unsafe_allow_html=True)
+
+
+def mark_site_complete() -> None:
+    """Store the exact site inputs used by the calculation."""
+    st.session_state.site_calculation_signature = (
+        round(float(st.session_state.latitude), 5),
+        round(float(st.session_state.longitude), 5),
+        int(st.session_state.resolution),
+        float(st.session_state.ghi_threshold),
+    )
+    st.session_state.site_completed = True
 
 
 st.set_page_config(page_title="PV Butterfly", page_icon="🦋", layout="wide")
@@ -74,11 +101,12 @@ st.markdown(
             gap: .75rem;
             margin: .5rem 0 1.5rem;
         }
-        .pv-nav a {
+        .pv-nav a, .pv-nav > div {
             min-height: 3.4rem;
             padding: .75rem;
             border-radius: .8rem;
             display: flex;
+            position: relative;
             align-items: center;
             justify-content: center;
             gap: .55rem;
@@ -96,15 +124,28 @@ st.markdown(
         .pv-nav.home {
             grid-template-columns: repeat(2, minmax(0, 1fr));
         }
-        .pv-nav.home a {
+        .pv-nav.home a, .pv-nav.home > div {
             min-height: 8rem;
             font-size: 1.3rem;
         }
-        .pv-nav a span { font-size: 1.35em; }
+        .pv-nav .nav-icon { font-size: 1.35em; }
+        .pv-nav .nav-status {
+            position: absolute;
+            right: .55rem;
+            bottom: .4rem;
+            font-size: .9rem;
+        }
         .pv-nav .site { background: #cfe8dc; }
         .pv-nav .objects { background: #d9e5f2; }
         .pv-nav .shadow { background: #f7dfb9; }
         .pv-nav .export { background: #eadcf0; }
+        .pv-nav .export.disabled {
+            color: #798087;
+            background: #e5e7e9;
+            border-color: #d5d8da;
+            box-shadow: none;
+            cursor: not-allowed;
+        }
         @media (max-width: 720px) {
             .pv-nav, .pv-nav.home { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         }
@@ -126,6 +167,11 @@ if "pending_coordinates" in st.session_state:
 active_page = st.query_params.get("page", "Home")
 if active_page not in (*PAGES, "Home"):
     active_page = "Home"
+if active_page == "Export Results" and not all(
+    st.session_state.get(key, False)
+    for key in ("site_completed", "object_completed", "shadow_completed")
+):
+    active_page = "Home"
 
 
 if active_page == "Home":
@@ -136,9 +182,9 @@ if active_page == "Home":
     with st.expander("Instructions"):
         st.caption("Instructions will be added as the workflow is developed.")
 
-elif active_page == "Site":
+elif active_page == "Site Creation":
     render_navigation()
-    st.title("Site")
+    st.title("Site Creation")
     st.caption("Representative annual clear-sky study for the selected location")
 
     with st.sidebar:
@@ -153,13 +199,28 @@ elif active_page == "Site":
         )
         resolution = st.selectbox(
             "Time step", options=[1, 5, 15], index=1,
-            format_func=lambda value: f"{value} min"
+            format_func=lambda value: f"{value} min", key="resolution"
         )
         ghi_threshold = st.number_input(
             "Clear-sky GHI threshold (W/m²)", min_value=0.0,
-            max_value=1400.0, value=100.0, step=10.0
+            max_value=1400.0, value=100.0, step=10.0, key="ghi_threshold"
         )
-        calculate = st.button("Calculate annual data", type="primary", width="stretch")
+        calculate = st.button(
+            "Calculate annual data", type="primary", width="stretch",
+            on_click=mark_site_complete
+        )
+
+    site_signature = (
+        round(float(latitude), 5),
+        round(float(longitude), 5),
+        int(resolution),
+        float(ghi_threshold),
+    )
+    previous_signature = st.session_state.get("site_calculation_signature")
+    if previous_signature is not None and previous_signature != site_signature:
+        st.session_state.site_completed = False
+        st.session_state.site_calculation_signature = None
+        st.rerun()
 
     map_col, summary_col = st.columns([1.4, 1])
     with map_col:
@@ -207,6 +268,8 @@ elif active_page == "Site":
                 year=REFERENCE_YEAR, interval_minutes=int(resolution),
                 ghi_threshold=float(ghi_threshold),
             )
+        st.session_state.site_completed = True
+        st.session_state.site_calculation_signature = site_signature
 
         annual_ghi = data["ghi"].sum() * float(resolution) / 60 / 1000
         st.subheader("Site parameters")
@@ -258,8 +321,8 @@ else:
     render_navigation()
     st.title(active_page)
     placeholder_text = {
-        "Objects": "Object definition will be added in the next development step.",
-        "Shadow study": "Shadow calculations will be added after the object definition.",
-        "Export": "KMZ and DWG export options will be added in a later step.",
+        "Object Generation": "Object definition will be added in the next development step.",
+        "Shadow Study": "Shadow calculations will be added after the object definition.",
+        "Export Results": "KMZ and DWG export options will be added in a later step.",
     }
     st.info(placeholder_text[active_page])
