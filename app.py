@@ -1,4 +1,3 @@
-import pandas as pd
 import folium
 import streamlit as st
 from branca.element import MacroElement
@@ -7,6 +6,9 @@ from jinja2 import Template
 from streamlit_folium import st_folium
 
 from solar_data import generate_annual_solar_data
+
+
+REFERENCE_YEAR = 2025
 
 
 class SyncDraggedMarker(MacroElement):
@@ -57,7 +59,7 @@ if "pending_coordinates" in st.session_state:
     st.session_state.longitude = pending_longitude
 
 st.title("PV Shadow Study")
-st.caption("Clear-sky solar data for the selected location")
+st.caption("Representative annual clear-sky study for the selected location")
 
 with st.sidebar:
     st.header("Study location")
@@ -77,7 +79,6 @@ with st.sidebar:
         format="%.5f",
         key="longitude",
     )
-    year = st.number_input("Year", min_value=2000, max_value=2100, value=2026, step=1)
     resolution = st.selectbox("Time step", options=[1, 5, 15], index=1, format_func=lambda x: f"{x} min")
     ghi_threshold = st.number_input(
         "Clear-sky GHI threshold (W/m²)", min_value=0.0, max_value=1400.0, value=100.0, step=10.0
@@ -129,7 +130,7 @@ with summary_col:
     st.subheader("Current study")
     st.metric("Coordinates", f"{latitude:.4f}°, {longitude:.4f}°")
     st.metric("Resolution", f"{resolution} minute{'s' if resolution != 1 else ''}")
-    expected_rows = int((366 if pd.Timestamp(year=year, month=12, day=31).is_leap_year else 365) * 24 * 60 / resolution)
+    expected_rows = int(365 * 24 * 60 / resolution)
     st.metric("Annual timestamps", f"{expected_rows:,}")
 
 if calculate:
@@ -137,7 +138,7 @@ if calculate:
         data = generate_annual_solar_data(
             latitude=latitude,
             longitude=longitude,
-            year=int(year),
+            year=REFERENCE_YEAR,
             interval_minutes=int(resolution),
             ghi_threshold=float(ghi_threshold),
         )
@@ -157,6 +158,6 @@ if calculate:
     st.download_button(
         "Download annual CSV",
         data=data.to_csv().encode("utf-8"),
-        file_name=f"solar_data_{year}_{latitude:.4f}_{longitude:.4f}_{resolution}min.csv",
+        file_name=f"clear_sky_{latitude:.4f}_{longitude:.4f}_{resolution}min.csv",
         mime="text/csv",
     )
