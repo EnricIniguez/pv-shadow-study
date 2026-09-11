@@ -27,29 +27,33 @@ class SyncDraggedMarker(MacroElement):
     )
 
 
-st.set_page_config(page_title="PV Shadow Study", page_icon="☀️", layout="wide")
+def open_page(page_name: str) -> None:
+    st.session_state.active_page = page_name
 
+
+st.set_page_config(page_title="PV Shadow Study", page_icon="☀️", layout="wide")
 st.markdown(
     """
     <style>
         .stApp { background: #ffffff; color: #0b2942; }
         [data-testid="stSidebar"] { background: #f3f8f5; }
-        [data-testid="stSidebar"] h2, h1, h2, h3 { color: #0b2942; }
         [data-testid="stMetric"] {
-            background: #f3f8f5;
-            border: 1px solid #d8e8df;
-            border-radius: 0.75rem;
-            padding: 1rem;
+            background: #f3f8f5; border: 1px solid #d8e8df;
+            border-radius: 0.75rem; padding: 1rem;
         }
         .stButton > button, .stDownloadButton > button {
-            border-radius: 0.55rem;
-            font-weight: 650;
+            border-radius: 0.65rem; font-weight: 650;
+        }
+        div[data-testid="stHorizontalBlock"] .stButton > button {
+            min-height: 7rem; font-size: 1.25rem;
         }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
+if "active_page" not in st.session_state:
+    st.session_state.active_page = "Home"
 if "latitude" not in st.session_state:
     st.session_state.latitude = 41.3874
 if "longitude" not in st.session_state:
@@ -59,54 +63,59 @@ if "pending_coordinates" in st.session_state:
     st.session_state.latitude = pending_latitude
     st.session_state.longitude = pending_longitude
 
-st.title("PV Shadow Study")
-st.caption("Representative annual clear-sky study for the selected location")
 
-with st.sidebar:
-    st.header("Study location")
-    latitude = st.number_input(
-        "Latitude (°)",
-        min_value=-90.0,
-        max_value=90.0,
-        step=0.00001,
-        format="%.5f",
-        key="latitude",
-    )
-    longitude = st.number_input(
-        "Longitude (°)",
-        min_value=-180.0,
-        max_value=180.0,
-        step=0.00001,
-        format="%.5f",
-        key="longitude",
-    )
-    resolution = st.selectbox("Time step", options=[1, 5, 15], index=1, format_func=lambda x: f"{x} min")
-    ghi_threshold = st.number_input(
-        "Clear-sky GHI threshold (W/m²)", min_value=0.0, max_value=1400.0, value=100.0, step=10.0
-    )
-    calculate = st.button("Calculate annual data", type="primary", width="stretch")
+if st.session_state.active_page == "Home":
+    st.title("PV Shadow Study")
+    st.caption("Select a study area to begin")
 
-site_tab, objects_tab, shadow_tab, export_tab = st.tabs(
-    ["Site", "Objects", "Shadow study", "Export"]
-)
+    first_col, second_col = st.columns(2)
+    with first_col:
+        st.button("📍  Site", width="stretch", on_click=open_page, args=("Site",))
+        st.button("🌤️  Shadow study", width="stretch", on_click=open_page, args=("Shadow study",))
+    with second_col:
+        st.button("🧊  Objects", width="stretch", on_click=open_page, args=("Objects",))
+        st.button("📦  Export", width="stretch", on_click=open_page, args=("Export",))
 
-with site_tab:
+    with st.expander("Instructions"):
+        st.caption("Instructions will be added as the workflow is developed.")
+
+elif st.session_state.active_page == "Site":
+    st.button("← Main page", on_click=open_page, args=("Home",))
+    st.title("Site")
+    st.caption("Representative annual clear-sky study for the selected location")
+
+    with st.sidebar:
+        st.header("Study location")
+        latitude = st.number_input(
+            "Latitude (°)", min_value=-90.0, max_value=90.0,
+            step=0.00001, format="%.5f", key="latitude"
+        )
+        longitude = st.number_input(
+            "Longitude (°)", min_value=-180.0, max_value=180.0,
+            step=0.00001, format="%.5f", key="longitude"
+        )
+        resolution = st.selectbox(
+            "Time step", options=[1, 5, 15], index=1,
+            format_func=lambda value: f"{value} min"
+        )
+        ghi_threshold = st.number_input(
+            "Clear-sky GHI threshold (W/m²)", min_value=0.0,
+            max_value=1400.0, value=100.0, step=10.0
+        )
+        calculate = st.button("Calculate annual data", type="primary", width="stretch")
+
     map_col, summary_col = st.columns([1.4, 1])
-
     with map_col:
         st.subheader("Select the study location")
         st.caption("Click the map to reposition the marker, or drag it for fine adjustment.")
         location_map = folium.Map(
-            location=[latitude, longitude],
-            zoom_start=17,
-            tiles=None,
-            control_scale=True,
+            location=[latitude, longitude], zoom_start=17,
+            tiles=None, control_scale=True
         )
         folium.TileLayer(
             tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
             attr="Esri, Maxar, Earthstar Geographics, and the GIS User Community",
-            name="Satellite",
-            overlay=False,
+            name="Satellite", overlay=False,
         ).add_to(location_map)
         location_marker = folium.Marker(
             [latitude, longitude],
@@ -118,12 +127,9 @@ with site_tab:
         location_marker.add_to(location_map)
         Fullscreen(position="topright").add_to(location_map)
         map_state = st_folium(
-            location_map,
-            key="study_location_map",
-            height=500,
-            use_container_width=True,
+            location_map, key="study_location_map",
+            height=500, use_container_width=True
         )
-
         clicked = map_state.get("last_clicked") if map_state else None
         if clicked:
             clicked_coordinates = (round(clicked["lat"], 6), round(clicked["lng"], 6))
@@ -133,95 +139,78 @@ with site_tab:
                 st.rerun()
 
     with summary_col:
-        st.subheader("Current study")
+        st.subheader("Current site")
         st.metric("Coordinates", f"{latitude:.5f}°, {longitude:.5f}°")
         st.metric("Resolution", f"{resolution} minute{'s' if resolution != 1 else ''}")
-        expected_rows = int(365 * 24 * 60 / resolution)
-        st.metric("Annual timestamps", f"{expected_rows:,}")
 
     if calculate:
         with st.spinner("Calculating solar position and clear-sky irradiance…"):
             data = generate_annual_solar_data(
-                latitude=latitude,
-                longitude=longitude,
-                year=REFERENCE_YEAR,
-                interval_minutes=int(resolution),
+                latitude=latitude, longitude=longitude,
+                year=REFERENCE_YEAR, interval_minutes=int(resolution),
                 ghi_threshold=float(ghi_threshold),
             )
 
-        relevant = data[data["above_ghi_threshold"]]
-        daylight = data[data["apparent_elevation"] > 0]
         annual_ghi = data["ghi"].sum() * float(resolution) / 60 / 1000
-
         st.subheader("Site parameters")
         st.dataframe(
             {
-                "Parameter": ["Annual clear-sky GHI", "Maximum clear-sky GHI", "Minimum clear-sky GHI"],
+                "Parameter": ["Annual clear-sky GHI", "Maximum clear-sky GHI"],
                 "Value": [
                     f"{annual_ghi:,.1f} kWh/m²",
                     f"{data['ghi'].max():,.1f} W/m²",
-                    f"{data['ghi'].min():,.1f} W/m²",
                 ],
             },
-            hide_index=True,
-            width="stretch",
+            hide_index=True, width="stretch",
         )
 
-        st.subheader("Annual result")
-        a, b, c = st.columns(3)
-        a.metric("Daylight timestamps", f"{len(daylight):,}")
-        b.metric("Above GHI threshold", f"{len(relevant):,}")
-        c.metric("Equivalent selected hours", f"{len(relevant) * resolution / 60:,.1f} h")
-
         st.subheader("Average clear-sky GHI by month and hour")
-        ghi_matrix, timezone_name, utc_offset = monthly_hourly_ghi_matrix(data, latitude, longitude)
+        ghi_matrix, timezone_name, utc_offset = monthly_hourly_ghi_matrix(
+            data, latitude, longitude
+        )
         heatmap_data = (
-            ghi_matrix.rename_axis("Month")
-            .reset_index()
+            ghi_matrix.rename_axis("Month").reset_index()
             .melt(id_vars="Month", var_name="Hour", value_name="Average GHI")
         )
         heatmap = (
-            alt.Chart(heatmap_data)
-            .mark_rect()
-            .encode(
+            alt.Chart(heatmap_data).mark_rect().encode(
                 x=alt.X("Hour:O", title="Hour of day", sort=list(range(24))),
                 y=alt.Y("Month:N", title=None, sort=list(ghi_matrix.index)),
                 color=alt.Color(
-                    "Average GHI:Q",
-                    title="GHI (W/m²)",
-                    scale=alt.Scale(range=["#f4faf6", "#9bd4b1", "#1e8e5a", "#0b2942"]),
+                    "Average GHI:Q", title="GHI (W/m²)",
+                    scale=alt.Scale(
+                        range=["#f4faf6", "#9bd4b1", "#1e8e5a", "#0b2942"]
+                    ),
                 ),
                 tooltip=[
                     alt.Tooltip("Month:N"),
                     alt.Tooltip("Hour:O", title="Local standard hour"),
                     alt.Tooltip("Average GHI:Q", title="Average GHI", format=".1f"),
                 ],
-            )
-            .properties(height=360)
+            ).properties(height=360)
         )
         st.altair_chart(heatmap, width="stretch")
 
         with st.expander("Preview calculated data"):
             st.dataframe(data.head(100), width="stretch")
-
         st.download_button(
             "Download annual CSV",
             data=data.to_csv().encode("utf-8"),
             file_name=f"clear_sky_{latitude:.4f}_{longitude:.4f}_{resolution}min.csv",
             mime="text/csv",
         )
-
         offset_label = f"UTC{utc_offset:+g}"
         st.caption(
             f"Time basis: local standard time ({timezone_name}, {offset_label}). "
             "Daylight saving time is not considered."
         )
 
-with objects_tab:
-    st.info("Object definition will be added in the next development step.")
-
-with shadow_tab:
-    st.info("Shadow calculations will be added after the object definition.")
-
-with export_tab:
-    st.info("KMZ and DWG export options will be added in a later step.")
+else:
+    st.button("← Main page", on_click=open_page, args=("Home",))
+    st.title(st.session_state.active_page)
+    placeholder_text = {
+        "Objects": "Object definition will be added in the next development step.",
+        "Shadow study": "Shadow calculations will be added after the object definition.",
+        "Export": "KMZ and DWG export options will be added in a later step.",
+    }
+    st.info(placeholder_text[st.session_state.active_page])
