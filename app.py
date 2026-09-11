@@ -1597,11 +1597,23 @@ elif active_page == "Shadow Study":
                 interval_minutes=int(interval_minutes),
                 ghi_threshold=float(ghi_threshold),
             )
+            boundary_solar_data = (
+                solar_data
+                if int(interval_minutes) == 1
+                else generate_annual_solar_data(
+                    latitude=study_latitude,
+                    longitude=study_longitude,
+                    year=REFERENCE_YEAR,
+                    interval_minutes=1,
+                    ghi_threshold=float(ghi_threshold),
+                )
+            )
             solid_shadow, flicker_risk, relevant_steps = annual_shadow_envelopes(
                 objects,
                 solar_data,
                 study_latitude,
                 study_longitude,
+                boundary_solar_data=boundary_solar_data,
             )
             solid_display = soften_envelope_boundary(
                 solid_shadow, int(interval_minutes), flicker=False
@@ -1725,8 +1737,8 @@ elif active_page == "Shadow Study":
             )
             st.caption(
                 "The annual edge connects equivalent first, highest-sun and last "
-                "shadow limits between consecutive solar days. Evening and following-"
-                "morning limits are never connected to each other."
+                "shadow limits calculated at one-minute resolution between consecutive "
+                "solar days. Evening and following-morning limits are never connected."
             )
 
 elif active_page == "Export Results":
