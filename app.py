@@ -32,6 +32,11 @@ PAGES = ("Site Creation", "Object Generation", "Shadow Study", "Export Results")
 
 def render_navigation(home: bool = False) -> None:
     """Render the pastel workflow navigation."""
+    if not home:
+        st.markdown(
+            '<a class="main-menu" href="?" target="_self">⌂&nbsp;&nbsp;Main menu</a>',
+            unsafe_allow_html=True,
+        )
     site_complete = st.session_state.get("site_completed", False)
     object_complete = st.session_state.get("object_completed", False)
     shadow_complete = st.session_state.get("shadow_completed", False)
@@ -81,7 +86,7 @@ st.markdown(
         .stApp {
             color: #16324a;
             background-color: #fffdf9;
-            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 600 500'%3E%3Cg fill='%23d8c3a5' fill-opacity='.13'%3E%3Cellipse cx='180' cy='175' rx='125' ry='155' transform='rotate(-28 180 175)'/%3E%3Cellipse cx='420' cy='175' rx='125' ry='155' transform='rotate(28 420 175)'/%3E%3Cellipse cx='205' cy='355' rx='90' ry='115' transform='rotate(24 205 355)'/%3E%3Cellipse cx='395' cy='355' rx='90' ry='115' transform='rotate(-24 395 355)'/%3E%3Cellipse cx='300' cy='270' rx='23' ry='175'/%3E%3C/g%3E%3C/svg%3E");
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 620'%3E%3Cg fill='%23d8c3a5' fill-opacity='.10' stroke='%23b79b74' stroke-opacity='.16' stroke-width='5'%3E%3Cpath d='M390 295 C350 110 125 35 70 155 C20 270 175 335 345 325 C205 350 105 455 180 535 C255 610 355 430 390 340 Z'/%3E%3Cpath d='M410 295 C450 110 675 35 730 155 C780 270 625 335 455 325 C595 350 695 455 620 535 C545 610 445 430 410 340 Z'/%3E%3C/g%3E%3Cg fill='none' stroke='%23b79b74' stroke-opacity='.14' stroke-width='4'%3E%3Cpath d='M385 290 C290 205 190 150 85 158 M365 322 C255 300 175 265 105 215 M350 350 C270 395 225 445 185 520 M415 290 C510 205 610 150 715 158 M435 322 C545 300 625 265 695 215 M450 350 C530 395 575 445 615 520'/%3E%3Cpath d='M394 175 C355 110 315 92 280 82 M406 175 C445 110 485 92 520 82' stroke-linecap='round'/%3E%3C/g%3E%3Cpath d='M400 180 C374 220 378 405 400 455 C422 405 426 220 400 180 Z' fill='%23b79b74' fill-opacity='.13'/%3E%3Ccircle cx='400' cy='168' r='17' fill='%23b79b74' fill-opacity='.13'/%3E%3C/svg%3E");
             background-position: center 58%;
             background-repeat: no-repeat;
             background-size: min(56vw, 680px);
@@ -95,6 +100,20 @@ st.markdown(
         .stButton > button, .stDownloadButton > button {
             border-radius: 0.65rem; font-weight: 650;
         }
+        .main-menu {
+            display: inline-flex;
+            align-items: center;
+            margin: 0 0 .7rem;
+            padding: .5rem .9rem;
+            border-radius: 999px;
+            color: #16324a !important;
+            background: rgba(255, 253, 249, .88);
+            border: 1px solid #d8c3a5;
+            font-weight: 700;
+            text-decoration: none !important;
+            box-shadow: 0 2px 8px rgba(22, 50, 74, .06);
+        }
+        .main-menu:hover { background: #f2e7d8; }
         .pv-nav {
             display: grid;
             grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -273,8 +292,21 @@ elif active_page == "Site Creation":
             st.info("Calculate the annual data to display the site parameters.")
         else:
             annual_ghi = data["ghi"].sum() * float(resolution) / 60 / 1000
+            hours_above_threshold = (
+                data["above_ghi_threshold"].sum() * float(resolution) / 60
+            )
+            annual_hours_share = hours_above_threshold / 8760 * 100
             st.metric("Annual clear-sky GHI", f"{annual_ghi:,.1f} kWh/m²")
             st.metric("Maximum clear-sky GHI", f"{data['ghi'].max():,.1f} W/m²")
+            st.metric(
+                "Hours above GHI threshold",
+                f"{hours_above_threshold:,.1f} h",
+            )
+            st.metric(
+                "Share of annual hours",
+                f"{annual_hours_share:.1f}%",
+                help="Percentage relative to 8,760 hours in a 365-day year.",
+            )
 
     if data is not None:
         st.subheader("Average clear-sky GHI by month and hour")
