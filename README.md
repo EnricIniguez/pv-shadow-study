@@ -11,6 +11,7 @@ irradiance data from latitude and longitude.
 - Solar azimuth and apparent elevation calculated with pvlib
 - Ineichen clear-sky GHI, DNI and DHI
 - Configurable clear-sky GHI threshold
+- Monthly-by-hour average clear-sky GHI heatmap in local standard time
 - Annual summary and CSV download
 
 The app uses a fixed 365-day reference year because the current calculation is
