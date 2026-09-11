@@ -1,5 +1,6 @@
 import altair as alt
 import folium
+import numpy as np
 import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as components
@@ -12,6 +13,7 @@ from streamlit_folium import st_folium
 
 from object_geometry import (
     bearing_from_coordinates,
+    circle_bounds_latlon,
     cuboid_dimension_midpoints,
     cuboid_footprint_latlon,
     cuboid_vertices,
@@ -94,6 +96,44 @@ class LiveMoveHandle(MacroElement):
         self.marker = marker
         self.polygon = polygon
         self.origin_marker = origin_marker
+        self.object_id = object_id
+
+
+class LiveTurbineMoveHandle(MacroElement):
+    """Move a turbine's mast and rotor reference live on the map."""
+
+    _template = Template(
+        """
+        {% macro script(this, kwargs) %}
+        {
+        const moveMarker = {{ this.marker.get_name() }};
+        const mastCircle = {{ this.mast_circle.get_name() }};
+        const rotorCircle = {{ this.rotor_circle.get_name() }};
+        const moveMetadata = document.createElement('span');
+        moveMetadata.innerText = 'MOVE||{{ this.object_id }}';
+        moveMarker._popup = L.popup({autoClose: false, closeOnClick: false})
+            .setContent(moveMetadata);
+        moveMarker.on('drag', function() {
+            const current = moveMarker.getLatLng();
+            mastCircle.setLatLng(current);
+            rotorCircle.setLatLng(current);
+        });
+        moveMarker.on('dragend', function() {
+            moveMarker.fire('click', {
+                latlng: moveMarker.getLatLng(),
+                sourceTarget: moveMarker
+            });
+        });
+        }
+        {% endmacro %}
+        """
+    )
+
+    def __init__(self, marker, mast_circle, rotor_circle, object_id):
+        super().__init__()
+        self.marker = marker
+        self.mast_circle = mast_circle
+        self.rotor_circle = rotor_circle
         self.object_id = object_id
 
 
@@ -261,6 +301,7 @@ def open_object_form(item: dict | None = None, index: int | None = None) -> None
     st.session_state.object_form_visible = True
     st.session_state.editing_object_index = index
     st.session_state.object_type = object_type
+    st.session_state.new_object_type_last = object_type
     st.session_state.object_name = (
         next_object_name(object_type) if is_new else item["name"]
     )
@@ -270,6 +311,9 @@ def open_object_form(item: dict | None = None, index: int | None = None) -> None
     st.session_state.object_latitude = float(item.get("latitude", st.session_state.latitude))
     st.session_state.object_longitude = float(item.get("longitude", st.session_state.longitude))
     st.session_state.object_azimuth = float(item.get("azimuth_deg", 90.0))
+    st.session_state.mast_radius = float(item.get("mast_radius_m", 2.5))
+    st.session_state.mast_height = float(item.get("mast_height_m", 100.0))
+    st.session_state.blade_length = float(item.get("blade_length_m", 60.0))
 
 
 def render_cuboid_preview(vertices, dimensions) -> None:
@@ -358,6 +402,88 @@ def render_cuboid_preview(vertices, dimensions) -> None:
             camera=dict(eye=dict(x=1.45, y=1.55, z=1.15)),
         ),
         showlegend=False,
+    )
+    st.plotly_chart(figure, width="stretch", config={"displaylogo": False})
+
+
+def render_wind_turbine_preview(
+    mast_radius: float, mast_height: float, blade_length: float
+) -> None:
+    """Render a north-facing, three-blade turbine centred on its mast."""
+    figure = go.Figure()
+    theta = np.linspace(0, 2 * np.pi, 36)
+    z_levels = np.array([0.0, mast_height])
+    theta_grid, z_grid = np.meshgrid(theta, z_levels)
+    radius_grid = mast_radius * (1 - 0.38 * z_grid / mast_height)
+    figure.add_trace(go.Surface(
+        x=radius_grid * np.cos(theta_grid),
+        y=radius_grid * np.sin(theta_grid), z=z_grid,
+        colorscale=[[0, "#d7e6df"], [1, "#9fc8ba"]],
+        showscale=False, hoverinfo="skip", opacity=0.95,
+    ))
+
+    hub_radius = max(mast_radius * 0.8, blade_length * 0.025)
+    u, v = np.mgrid[0:2*np.pi:22j, 0:np.pi:12j]
+    figure.add_trace(go.Surface(
+        x=hub_radius * np.cos(u) * np.sin(v),
+        y=hub_radius * np.sin(u) * np.sin(v),
+        z=mast_height + hub_radius * np.cos(v),
+        colorscale=[[0, "#315c70"], [1, "#547f8c"]],
+        showscale=False, hoverinfo="skip",
+    ))
+
+    root = hub_radius * 0.8
+    for angle_deg in (90, 210, 330):
+        angle = np.radians(angle_deg)
+        radial = np.array([np.cos(angle), 0.0, np.sin(angle)])
+        tangent = np.array([-np.sin(angle), 0.0, np.cos(angle)])
+        root_point = np.array([0.0, 0.0, mast_height]) + radial * root
+        tip_point = np.array([0.0, 0.0, mast_height]) + radial * blade_length
+        width = max(blade_length * 0.055, mast_radius * 0.5)
+        blade = np.array([
+            root_point - tangent * width,
+            root_point + tangent * width,
+            tip_point + tangent * width * 0.08,
+            tip_point - tangent * width * 0.08,
+        ])
+        figure.add_trace(go.Mesh3d(
+            x=blade[:, 0], y=blade[:, 1], z=blade[:, 2],
+            i=[0, 0], j=[1, 2], k=[2, 3], color="#e8eee9",
+            flatshading=True, hoverinfo="skip", showlegend=False,
+        ))
+
+    north_span = max(blade_length, mast_height) * 0.28
+    figure.add_trace(go.Scatter3d(
+        x=[0, 0], y=[0, north_span], z=[mast_height, mast_height],
+        mode="lines+text", line=dict(color="#3a9565", width=7),
+        text=[None, "North · rotor direction"], textposition="top center",
+        hoverinfo="skip", showlegend=False,
+    ))
+    figure.add_trace(go.Scatter3d(
+        x=[0], y=[0], z=[0], mode="markers+text",
+        marker=dict(size=8, color="#c84848"), text=["ORIGIN · MAST CENTRE"],
+        textposition="bottom center", hoverinfo="skip", showlegend=False,
+    ))
+    upper_height = mast_height + blade_length
+    figure.add_trace(go.Scatter3d(
+        x=[0, blade_length * 0.52, 0], y=[0, 0, 0],
+        z=[mast_height * 0.5, mast_height, upper_height], mode="text",
+        text=[f"Mast = {mast_height:g} m", f"Blade = {blade_length:g} m",
+              f"Upper tip = {upper_height:g} m"],
+        textfont=dict(size=13, color="#16324a"), hoverinfo="skip",
+        showlegend=False,
+    ))
+    extent = max(upper_height, blade_length * 2)
+    figure.update_layout(
+        height=650, margin=dict(l=0, r=0, t=15, b=0),
+        paper_bgcolor="rgba(255,255,255,0.76)", showlegend=False,
+        scene=dict(
+            xaxis_title="X · East (m)", yaxis_title="Y · North (m)",
+            zaxis_title="Height (m)", aspectmode="data",
+            camera=dict(eye=dict(x=1.55, y=1.7, z=1.05)),
+            xaxis=dict(range=[-extent * 0.55, extent * 0.55]),
+            zaxis=dict(range=[0, upper_height * 1.08]),
+        ),
     )
     st.plotly_chart(figure, width="stretch", config={"displaylogo": False})
 
@@ -704,15 +830,98 @@ elif active_page == "Object Generation":
         editing_index = st.session_state.get("editing_object_index")
         st.subheader("Edit object" if editing_index is not None else "New object")
         object_type = st.selectbox(
-            "Object type", ["Cuboid", "Wind turbine"], key="object_type"
+            "Object type", ["Cuboid", "Wind turbine"], key="object_type",
+            disabled=editing_index is not None,
         )
+        if (
+            editing_index is None
+            and object_type != st.session_state.get("new_object_type_last")
+        ):
+            st.session_state.new_object_type_last = object_type
+            st.session_state.object_name = next_object_name(object_type)
         st.text_input("Object name", key="object_name")
 
         if object_type == "Wind turbine":
-            st.info("Wind-turbine geometry will be added in the next development step.")
-            if st.button("Cancel"):
+            controls, preview = st.columns([0.82, 1.65], gap="large")
+            with controls:
+                st.markdown("##### Turbine dimensions")
+                mast_radius = st.number_input(
+                    "Mast radius (m)", min_value=0.05, step=0.1,
+                    key="mast_radius",
+                )
+                mast_height = st.number_input(
+                    "Mast height / hub height (m)", min_value=0.1,
+                    step=1.0, key="mast_height",
+                )
+                blade_length = st.number_input(
+                    "Blade length (m)", min_value=0.1, step=1.0,
+                    key="blade_length",
+                )
+                upper_tip_height = mast_height + blade_length
+                st.metric("Calculated upper blade-tip height", f"{upper_tip_height:g} m")
+                st.markdown("##### Mast-centre position")
+                object_latitude = st.number_input(
+                    "Origin latitude (°)", min_value=-90.0, max_value=90.0,
+                    step=0.00001, format="%.5f", key="object_latitude",
+                )
+                object_longitude = st.number_input(
+                    "Origin longitude (°)", min_value=-180.0, max_value=180.0,
+                    step=0.00001, format="%.5f", key="object_longitude",
+                )
+                st.caption(
+                    "The coordinates define the centre of the mast at ground level. "
+                    "The three-blade rotor always faces North; no azimuth is required."
+                )
+                save_col, cancel_col = st.columns(2)
+                save_clicked = save_col.button(
+                    "Save object", type="primary", width="stretch"
+                )
+                cancel_clicked = cancel_col.button("Cancel", width="stretch")
+
+            with preview:
+                st.subheader("Live 3D preview")
+                render_wind_turbine_preview(mast_radius, mast_height, blade_length)
+
+            if cancel_clicked:
                 st.session_state.object_form_visible = False
                 st.rerun()
+            if save_clicked:
+                clean_name = st.session_state.object_name.strip()
+                if not clean_name:
+                    st.error("Enter an object name before saving.")
+                elif any(
+                    existing["name"].casefold() == clean_name.casefold()
+                    and index != editing_index
+                    for index, existing in enumerate(st.session_state.objects)
+                ):
+                    st.error("Object names must be unique.")
+                else:
+                    saved_object = {
+                        "id": (
+                            st.session_state.objects[editing_index]["id"]
+                            if editing_index is not None else str(uuid.uuid4())
+                        ),
+                        "name": clean_name,
+                        "type": "Wind turbine",
+                        "mast_radius_m": float(mast_radius),
+                        "mast_height_m": float(mast_height),
+                        "blade_length_m": float(blade_length),
+                        "upper_tip_height_m": float(upper_tip_height),
+                        "latitude": float(object_latitude),
+                        "longitude": float(object_longitude),
+                    }
+                    was_complete = bool(st.session_state.objects)
+                    if editing_index is None:
+                        st.session_state.objects.append(saved_object)
+                    else:
+                        st.session_state.objects[editing_index] = saved_object
+                    st.session_state.object_map_revision += 1
+                    st.session_state.object_completed = True
+                    st.session_state.object_form_visible = False
+                    st.session_state.editing_object_index = None
+                    if not was_complete:
+                        st.session_state.completion_notice = "Object Generation"
+                    st.rerun()
         else:
             controls, preview = st.columns([0.82, 1.65], gap="large")
             with controls:
@@ -812,10 +1021,18 @@ elif active_page == "Object Generation":
             for index, item in enumerate(st.session_state.objects):
                 with st.container(border=True):
                     st.markdown(f"**{item['name']}** · {item['type']}")
-                    st.caption(
-                        f"{item['length_x_m']:g} × {item['width_y_m']:g} × "
-                        f"{item['height_z_m']:g} m · Azimuth {item['azimuth_deg']:g}°"
-                    )
+                    if item["type"] == "Wind turbine":
+                        st.caption(
+                            f"Mast radius {item['mast_radius_m']:g} m · "
+                            f"Hub {item['mast_height_m']:g} m · "
+                            f"Blade {item['blade_length_m']:g} m · "
+                            f"Upper tip {item['upper_tip_height_m']:g} m"
+                        )
+                    else:
+                        st.caption(
+                            f"{item['length_x_m']:g} × {item['width_y_m']:g} × "
+                            f"{item['height_z_m']:g} m · Azimuth {item['azimuth_deg']:g}°"
+                        )
                     st.caption(
                         f"Origin: {item['latitude']:.5f}, {item['longitude']:.5f}"
                     )
@@ -846,6 +1063,45 @@ elif active_page == "Object Generation":
             ).add_to(object_map)
             all_footprint_points = []
             for item in st.session_state.objects:
+                safe_name = escape(item["name"])
+                if item["type"] == "Wind turbine":
+                    centre = (item["latitude"], item["longitude"])
+                    all_footprint_points.extend(circle_bounds_latlon(
+                        item["latitude"], item["longitude"], item["blade_length_m"]
+                    ))
+                    rotor_circle = folium.Circle(
+                        location=centre, radius=item["blade_length_m"],
+                        color="#547f8c", weight=2, dash_array="7 6",
+                        fill=True, fill_color="#dbe8e2", fill_opacity=0.18,
+                        tooltip=safe_name,
+                    )
+                    mast_circle = folium.Circle(
+                        location=centre, radius=item["mast_radius_m"],
+                        color="#1f6f55", weight=3,
+                        fill=True, fill_color="#9fc8ba", fill_opacity=0.72,
+                        tooltip=safe_name,
+                    )
+                    rotor_circle.add_to(object_map)
+                    mast_circle.add_to(object_map)
+                    move_handle = folium.Marker(
+                        centre, draggable=True, tooltip=safe_name,
+                        icon=folium.DivIcon(
+                            icon_size=(34, 34), icon_anchor=(17, 17),
+                            html=(
+                                '<div style="width:34px;height:34px;cursor:move">'
+                                '<div style="width:30px;height:30px;border-radius:50%;'
+                                'background:#fffdf9;border:2px solid #1f6f55;color:#1f6f55;'
+                                'display:flex;align-items:center;justify-content:center;'
+                                'font-size:20px;font-weight:800;box-shadow:0 2px 7px #0004">✥</div></div>'
+                            ),
+                        ),
+                    )
+                    move_handle.add_to(object_map)
+                    object_map.add_child(LiveTurbineMoveHandle(
+                        move_handle, mast_circle, rotor_circle, item["id"]
+                    ))
+                    continue
+
                 footprint = cuboid_footprint_latlon(
                     item["latitude"], item["longitude"],
                     item["length_x_m"], item["width_y_m"],
@@ -853,7 +1109,6 @@ elif active_page == "Object Generation":
                 )
                 all_footprint_points.extend(footprint)
                 centre = footprint_center(footprint)
-                safe_name = escape(item["name"])
                 object_polygon = folium.Polygon(
                     locations=footprint,
                     color="#1f6f55", weight=3,
@@ -948,17 +1203,25 @@ elif active_page == "Object Generation":
                         None,
                     )
                     if selected is not None and action_label == "MOVE":
-                        old_footprint = cuboid_footprint_latlon(
-                            selected["latitude"], selected["longitude"],
-                            selected["length_x_m"], selected["width_y_m"],
-                            selected["azimuth_deg"],
-                        )
-                        old_centre = footprint_center(old_footprint)
-                        selected["latitude"] += handle_position["lat"] - old_centre[0]
-                        selected["longitude"] += handle_position["lng"] - old_centre[1]
+                        if selected["type"] == "Wind turbine":
+                            selected["latitude"] = handle_position["lat"]
+                            selected["longitude"] = handle_position["lng"]
+                        else:
+                            old_footprint = cuboid_footprint_latlon(
+                                selected["latitude"], selected["longitude"],
+                                selected["length_x_m"], selected["width_y_m"],
+                                selected["azimuth_deg"],
+                            )
+                            old_centre = footprint_center(old_footprint)
+                            selected["latitude"] += handle_position["lat"] - old_centre[0]
+                            selected["longitude"] += handle_position["lng"] - old_centre[1]
                         st.session_state.object_map_revision += 1
                         st.rerun()
-                    if selected is not None and action_label == "ROTATE":
+                    if (
+                        selected is not None
+                        and selected["type"] == "Cuboid"
+                        and action_label == "ROTATE"
+                    ):
                         displacement = abs(handle_position["lat"] - selected["latitude"]) + abs(
                             handle_position["lng"] - selected["longitude"]
                         )
