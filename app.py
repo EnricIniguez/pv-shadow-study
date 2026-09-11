@@ -32,6 +32,7 @@ from shadow_geometry import (
 
 REFERENCE_YEAR = 2025
 SITE_INTERVAL_MINUTES = 15
+SHADOW_INTERVAL_MINUTES = 1
 DISTANT_OBJECT_THRESHOLD_KM = 50.0
 
 
@@ -1552,20 +1553,16 @@ elif active_page == "Shadow Study":
 
     control_col, explanation_col = st.columns([0.72, 2.1], gap="large")
     with control_col:
-        interval_minutes = st.selectbox(
-            "Shadow calculation time step",
-            options=[1, 5, 15], index=2,
-            format_func=lambda value: f"{value} minute{'s' if value != 1 else ''}",
-            key="shadow_interval_minutes",
-        )
+        interval_minutes = SHADOW_INTERVAL_MINUTES
+        st.markdown("**Shadow time step: 1 minute**")
         ghi_threshold = st.number_input(
             "Clear-sky GHI threshold (W/m²)", min_value=0.0,
             max_value=1400.0, value=100.0, step=10.0,
             key="shadow_ghi_threshold",
         )
         st.caption(
-            "The selected step controls irradiance screening and affected-hours totals. "
-            "The external boundary is automatically refined at one-minute resolution."
+            "Shadow solar position, clear-sky GHI, affected hours and boundary geometry "
+            "are all evaluated from an independent one-minute pvlib series."
         )
         calculate_shadow = st.button(
             "Calculate shadow area", type="primary", width="stretch",
@@ -1598,23 +1595,12 @@ elif active_page == "Shadow Study":
                 interval_minutes=int(interval_minutes),
                 ghi_threshold=float(ghi_threshold),
             )
-            boundary_solar_data = (
-                solar_data
-                if int(interval_minutes) == 1
-                else generate_annual_solar_data(
-                    latitude=study_latitude,
-                    longitude=study_longitude,
-                    year=REFERENCE_YEAR,
-                    interval_minutes=1,
-                    ghi_threshold=float(ghi_threshold),
-                )
-            )
             solid_shadow, flicker_risk, relevant_steps = annual_shadow_envelopes(
                 objects,
                 solar_data,
                 study_latitude,
                 study_longitude,
-                boundary_solar_data=boundary_solar_data,
+                boundary_solar_data=solar_data,
             )
             solid_display = soften_envelope_boundary(
                 solid_shadow, int(interval_minutes), flicker=False
