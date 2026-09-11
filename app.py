@@ -23,7 +23,11 @@ from object_geometry import (
     footprint_center,
 )
 from solar_data import generate_annual_solar_data, monthly_hourly_ghi_matrix
-from shadow_geometry import annual_shadow_envelopes, geometry_to_latlon_rings
+from shadow_geometry import (
+    annual_shadow_envelopes,
+    geometry_to_latlon_rings,
+    soften_envelope_boundary,
+)
 
 
 REFERENCE_YEAR = 2025
@@ -1599,6 +1603,12 @@ elif active_page == "Shadow Study":
                 study_latitude,
                 study_longitude,
             )
+            solid_display = soften_envelope_boundary(
+                solid_shadow, int(interval_minutes), flicker=False
+            )
+            flicker_display = soften_envelope_boundary(
+                flicker_risk, int(interval_minutes), flicker=True
+            )
             production_mask = (
                 (solar_data["ghi"] > 0.0)
                 & (solar_data["apparent_elevation"] > 0.0)
@@ -1613,6 +1623,8 @@ elif active_page == "Shadow Study":
         st.session_state.shadow_result = {
             "solid": solid_shadow,
             "flicker": flicker_risk,
+            "solid_display": solid_display,
+            "flicker_display": flicker_display,
             "relevant_steps": relevant_steps,
             "interval_minutes": int(interval_minutes),
             "ghi_threshold": float(ghi_threshold),
@@ -1645,11 +1657,13 @@ elif active_page == "Shadow Study":
         result = st.session_state.get("shadow_result")
         if result is not None:
             map_bounds.extend(add_shadow_geometry_to_map(
-                shadow_map, result["solid"], reference_latitude, reference_longitude,
+                shadow_map, result.get("solid_display", result["solid"]),
+                reference_latitude, reference_longitude,
                 "#153c5a", "#315c70", "Annual main shadow area",
             ))
             map_bounds.extend(add_shadow_geometry_to_map(
-                shadow_map, result["flicker"], reference_latitude, reference_longitude,
+                shadow_map, result.get("flicker_display", result["flicker"]),
+                reference_latitude, reference_longitude,
                 "#c88732", "#edc77c", "Potential turbine flicker-risk area",
             ))
 
@@ -1708,6 +1722,10 @@ elif active_page == "Shadow Study":
                 f"Calculated using clear-sky GHI ≥ {result['ghi_threshold']:g} W/m² "
                 f"at {result['interval_minutes']}-minute intervals "
                 f"({result['relevant_steps']:,} relevant time steps). Flat terrain assumed."
+            )
+            st.caption(
+                "Displayed boundaries are straight-line generalisations of the exact "
+                "timestamp union. Reported areas use the unsmoothed geometry."
             )
 
 elif active_page == "Export Results":
