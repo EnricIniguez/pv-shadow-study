@@ -86,8 +86,8 @@ st.markdown(
         .stApp {
             color: #16324a;
             background-color: #fffdf9;
-            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 650'%3E%3Cg stroke='%23806a55' stroke-width='5' stroke-linejoin='round'%3E%3Cpath d='M382 304 C323 154 186 70 75 118 C57 236 156 320 354 337 C237 340 171 390 177 474 C218 502 280 477 363 370 C329 491 273 549 209 588 C294 565 361 495 390 386 Z' fill='%23e6d7c3'/%3E%3Cpath d='M418 304 C477 154 614 70 725 118 C743 236 644 320 446 337 C563 340 629 390 623 474 C582 502 520 477 437 370 C471 491 527 549 591 588 C506 565 439 495 410 386 Z' fill='%23e6d7c3'/%3E%3Cpath d='M354 299 C304 194 213 128 113 145 C141 230 221 286 354 318 Z M446 299 C496 194 587 128 687 145 C659 230 579 286 446 318 Z' fill='%23806a55'/%3E%3Cellipse cx='277' cy='391' rx='65' ry='48' transform='rotate(-18 277 391)' fill='%23a98d70'/%3E%3Cellipse cx='523' cy='391' rx='65' ry='48' transform='rotate(18 523 391)' fill='%23a98d70'/%3E%3Cpath d='M248 462 C276 423 314 411 344 421 C326 477 289 509 244 515 Z M552 462 C524 423 486 411 456 421 C474 477 511 509 556 515 Z' fill='%23806a55'/%3E%3Cellipse cx='216' cy='438' rx='23' ry='27' fill='%23806a55'/%3E%3Cellipse cx='584' cy='438' rx='23' ry='27' fill='%23806a55'/%3E%3Cpath d='M400 289 C379 315 380 477 400 526 C420 477 421 315 400 289 Z' fill='%2364503f'/%3E%3Ccircle cx='400' cy='275' r='18' fill='%2364503f'/%3E%3Cpath d='M392 267 C369 218 340 181 321 148 M408 267 C431 218 460 181 479 148' fill='none' stroke-linecap='round'/%3E%3C/g%3E%3C/svg%3E");
-            background-position: center 58%;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 620'%3E%3Cg fill='%23dccbb5' fill-opacity='.10' stroke='%23cbb79d' stroke-opacity='.14' stroke-width='4' stroke-linejoin='round'%3E%3Cpath d='M386 304 C338 164 196 76 82 137 C86 252 188 319 354 326 C244 342 184 410 199 501 C268 519 340 436 388 355 Z'/%3E%3Cpath d='M414 304 C462 164 604 76 718 137 C714 252 612 319 446 326 C556 342 616 410 601 501 C532 519 460 436 412 355 Z'/%3E%3Cpath d='M398 278 C383 322 385 442 400 487 C415 442 417 322 402 278 Z'/%3E%3C/g%3E%3Cg fill='none' stroke='%23cbb79d' stroke-opacity='.13' stroke-width='4' stroke-linecap='round'%3E%3Cpath d='M393 281 C365 224 337 184 307 153 M407 281 C435 224 463 184 493 153'/%3E%3Cpath d='M361 322 C267 287 176 225 104 151 M439 322 C533 287 624 225 696 151'/%3E%3C/g%3E%3C/svg%3E");
+            background-position: center center;
             background-repeat: no-repeat;
             background-size: min(56vw, 680px);
             background-attachment: fixed;
@@ -216,7 +216,6 @@ elif active_page == "Site Creation":
             "Longitude (°)", min_value=-180.0, max_value=180.0,
             step=0.00001, format="%.5f", key="longitude"
         )
-        st.caption("Site-data time step: 15 minutes")
         ghi_threshold = st.number_input(
             "Clear-sky GHI threshold (W/m²)", min_value=0.0,
             max_value=1400.0, value=100.0, step=10.0, key="ghi_threshold"
