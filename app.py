@@ -222,6 +222,17 @@ elif active_page == "Site Creation":
         st.session_state.site_calculation_signature = None
         st.rerun()
 
+    data = None
+    if calculate:
+        with st.spinner("Calculating solar position and clear-sky irradiance…"):
+            data = generate_annual_solar_data(
+                latitude=latitude, longitude=longitude,
+                year=REFERENCE_YEAR, interval_minutes=int(resolution),
+                ghi_threshold=float(ghi_threshold),
+            )
+        st.session_state.site_completed = True
+        st.session_state.site_calculation_signature = site_signature
+
     map_col, summary_col = st.columns([1.4, 1])
     with map_col:
         st.subheader("Select the study location")
@@ -257,33 +268,15 @@ elif active_page == "Site Creation":
                 st.rerun()
 
     with summary_col:
-        st.subheader("Current site")
-        st.metric("Coordinates", f"{latitude:.5f}°, {longitude:.5f}°")
-        st.metric("Resolution", f"{resolution} minute{'s' if resolution != 1 else ''}")
-
-    if calculate:
-        with st.spinner("Calculating solar position and clear-sky irradiance…"):
-            data = generate_annual_solar_data(
-                latitude=latitude, longitude=longitude,
-                year=REFERENCE_YEAR, interval_minutes=int(resolution),
-                ghi_threshold=float(ghi_threshold),
-            )
-        st.session_state.site_completed = True
-        st.session_state.site_calculation_signature = site_signature
-
-        annual_ghi = data["ghi"].sum() * float(resolution) / 60 / 1000
         st.subheader("Site parameters")
-        st.dataframe(
-            {
-                "Parameter": ["Annual clear-sky GHI", "Maximum clear-sky GHI"],
-                "Value": [
-                    f"{annual_ghi:,.1f} kWh/m²",
-                    f"{data['ghi'].max():,.1f} W/m²",
-                ],
-            },
-            hide_index=True, width="stretch",
-        )
+        if data is None:
+            st.info("Calculate the annual data to display the site parameters.")
+        else:
+            annual_ghi = data["ghi"].sum() * float(resolution) / 60 / 1000
+            st.metric("Annual clear-sky GHI", f"{annual_ghi:,.1f} kWh/m²")
+            st.metric("Maximum clear-sky GHI", f"{data['ghi'].max():,.1f} W/m²")
 
+    if data is not None:
         st.subheader("Average clear-sky GHI by month and hour")
         ghi_matrix, timezone_name, utc_offset = monthly_hourly_ghi_matrix(
             data, latitude, longitude
