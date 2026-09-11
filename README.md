@@ -13,6 +13,7 @@ irradiance data from latitude and longitude.
 - Configurable clear-sky GHI threshold
 - Monthly-by-hour average clear-sky GHI heatmap in local standard time
 - Annual and maximum clear-sky GHI site parameters
+- Absolute and relative annual hours above the selected GHI threshold
 - Completion-aware workflow navigation for Site Creation, Object Generation,
   Shadow Study and Export Results
 
