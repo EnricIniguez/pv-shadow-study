@@ -1,5 +1,7 @@
 import altair as alt
 import folium
+import hashlib
+import json
 import numpy as np
 import plotly.graph_objects as go
 import streamlit as st
@@ -20,6 +22,7 @@ from object_geometry import (
     footprint_center,
 )
 from solar_data import generate_annual_solar_data, monthly_hourly_ghi_matrix
+from shadow_geometry import annual_shadow_envelopes, geometry_to_latlon_rings
 
 
 REFERENCE_YEAR = 2025
@@ -344,12 +347,50 @@ def delete_saved_object(object_id: str) -> None:
     st.session_state.object_map_revision = (
         st.session_state.get("object_map_revision", 0) + 1
     )
+    invalidate_shadow_study()
+
+
+def invalidate_shadow_study() -> None:
+    """Invalidate results whenever site or object geometry changes."""
+    st.session_state.shadow_completed = False
+    st.session_state.pop("shadow_result", None)
+    st.session_state.pop("shadow_result_signature", None)
 
 
 def reset_project() -> None:
     """Clear the current study and return to a clean main menu."""
     st.session_state.clear()
     st.query_params.clear()
+
+
+def shadow_study_signature(interval_minutes: int) -> str:
+    """Return a stable signature of every input affecting the shadow result."""
+    payload = {
+        "site": st.session_state.get("site_calculation_signature"),
+        "objects": st.session_state.get("objects", []),
+        "interval_minutes": interval_minutes,
+    }
+    encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:16]
+
+
+def add_shadow_geometry_to_map(
+    map_object, geometry, reference_latitude: float, reference_longitude: float,
+    colour: str, fill_colour: str, tooltip: str,
+) -> list[tuple[float, float]]:
+    """Add a Shapely polygon or multipolygon to a Folium map."""
+    bounds = []
+    for exterior, holes in geometry_to_latlon_rings(
+        geometry, reference_latitude, reference_longitude
+    ):
+        rings = [exterior, *holes]
+        folium.Polygon(
+            locations=rings, color=colour, weight=2,
+            fill=True, fill_color=fill_colour, fill_opacity=0.34,
+            tooltip=tooltip,
+        ).add_to(map_object)
+        bounds.extend(exterior)
+    return bounds
 
 
 def render_cuboid_preview(vertices, dimensions) -> None:
@@ -753,6 +794,7 @@ elif active_page == "Site Creation":
         st.session_state.site_completed = False
         st.session_state.site_calculation_signature = None
         st.session_state.pop("site_data", None)
+        invalidate_shadow_study()
         st.rerun()
 
     data = st.session_state.get("site_data")
@@ -983,6 +1025,7 @@ elif active_page == "Object Generation":
                             for item in st.session_state.objects
                         ]
                     st.session_state.object_map_revision += 1
+                    invalidate_shadow_study()
                     st.session_state.object_completed = True
                     st.session_state.object_form_visible = False
                     st.session_state.editing_object_index = None
@@ -1085,6 +1128,7 @@ elif active_page == "Object Generation":
                             for item in st.session_state.objects
                         ]
                     st.session_state.object_map_revision += 1
+                    invalidate_shadow_study()
                     st.session_state.object_completed = True
                     st.session_state.object_form_visible = False
                     st.session_state.editing_object_index = None
@@ -1294,6 +1338,7 @@ elif active_page == "Object Generation":
                             selected["latitude"] += handle_position["lat"] - old_centre[0]
                             selected["longitude"] += handle_position["lng"] - old_centre[1]
                         st.session_state.object_map_revision += 1
+                        invalidate_shadow_study()
                         st.rerun()
                     if (
                         selected is not None
@@ -1309,13 +1354,150 @@ elif active_page == "Object Generation":
                                 handle_position["lat"], handle_position["lng"],
                             )
                             st.session_state.object_map_revision += 1
+                            invalidate_shadow_study()
                             st.rerun()
 
-elif active_page in ("Shadow Study", "Export Results"):
+elif active_page == "Shadow Study":
     render_navigation()
-    st.title(active_page)
-    placeholder_text = {
-        "Shadow Study": "Shadow calculations will be added after the object definition.",
-        "Export Results": "KMZ and DWG export options will be added in a later step.",
-    }
-    st.info(placeholder_text[active_page])
+    st.title("Shadow Study")
+    st.caption(
+        "Annual clear-sky shadow envelope for the objects defined in this project"
+    )
+
+    objects = st.session_state.get("objects", [])
+    site_ready = st.session_state.get("site_completed", False)
+    object_ready = bool(objects)
+    if not site_ready:
+        st.warning("Complete and calculate Site Creation before running the shadow study.")
+    if not object_ready:
+        st.warning("Create at least one object before running the shadow study.")
+
+    control_col, explanation_col = st.columns([0.72, 2.1], gap="large")
+    with control_col:
+        interval_minutes = st.selectbox(
+            "Shadow calculation time step",
+            options=[1, 5, 15], index=2,
+            format_func=lambda value: f"{value} minute{'s' if value != 1 else ''}",
+            key="shadow_interval_minutes",
+        )
+        st.caption(
+            "15 minutes is fastest. Use 1 minute for the final high-resolution study."
+        )
+        calculate_shadow = st.button(
+            "Calculate shadow area", type="primary", width="stretch",
+            disabled=not (site_ready and object_ready),
+        )
+    with explanation_col:
+        st.markdown(
+            "**Area interpretation**  \n"
+            "The main shadow layer contains cuboids and turbine masts. The separate "
+            "flicker-risk layer treats each turbine rotor as a continuously swept disc. "
+            "It indicates potential blade flicker and is not a full exclusion area."
+        )
+
+    current_signature = shadow_study_signature(interval_minutes)
+    if st.session_state.get("shadow_result_signature") != current_signature:
+        st.session_state.pop("shadow_result", None)
+        st.session_state.shadow_completed = False
+
+    if calculate_shadow:
+        with st.spinner(
+            f"Calculating the annual envelope at {interval_minutes}-minute resolution…"
+        ):
+            solar_data = generate_annual_solar_data(
+                latitude=float(st.session_state.latitude),
+                longitude=float(st.session_state.longitude),
+                year=REFERENCE_YEAR,
+                interval_minutes=int(interval_minutes),
+                ghi_threshold=float(st.session_state.ghi_threshold),
+            )
+            solid_shadow, flicker_risk, relevant_steps = annual_shadow_envelopes(
+                objects,
+                solar_data,
+                float(st.session_state.latitude),
+                float(st.session_state.longitude),
+            )
+        st.session_state.shadow_result = {
+            "solid": solid_shadow,
+            "flicker": flicker_risk,
+            "relevant_steps": relevant_steps,
+            "interval_minutes": int(interval_minutes),
+        }
+        st.session_state.shadow_result_signature = current_signature
+        was_complete = st.session_state.get("shadow_completed", False)
+        st.session_state.shadow_completed = True
+        if not was_complete:
+            st.session_state.completion_notice = "Shadow Study"
+        st.rerun()
+
+    if objects:
+        st.divider()
+        st.subheader("Objects and annual area of effect")
+        reference_latitude = float(st.session_state.latitude)
+        reference_longitude = float(st.session_state.longitude)
+        shadow_map = folium.Map(
+            location=[reference_latitude, reference_longitude],
+            zoom_start=17, tiles=None, control_scale=True,
+        )
+        folium.TileLayer(
+            tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+            attr="Esri, Maxar, Earthstar Geographics, and the GIS User Community",
+            name="Satellite", overlay=False,
+        ).add_to(shadow_map)
+        map_bounds = []
+        result = st.session_state.get("shadow_result")
+        if result is not None:
+            map_bounds.extend(add_shadow_geometry_to_map(
+                shadow_map, result["solid"], reference_latitude, reference_longitude,
+                "#153c5a", "#315c70", "Annual main shadow area",
+            ))
+            map_bounds.extend(add_shadow_geometry_to_map(
+                shadow_map, result["flicker"], reference_latitude, reference_longitude,
+                "#c88732", "#edc77c", "Potential turbine flicker-risk area",
+            ))
+
+        for item in objects:
+            safe_name = escape(item["name"])
+            if item["type"] == "Wind turbine":
+                centre = (item["latitude"], item["longitude"])
+                folium.Circle(
+                    centre, radius=item["mast_radius_m"], color="#1f6f55",
+                    weight=3, fill=True, fill_color="#9fc8ba", fill_opacity=0.8,
+                    tooltip=safe_name,
+                ).add_to(shadow_map)
+                map_bounds.extend(circle_bounds_latlon(
+                    item["latitude"], item["longitude"], item["blade_length_m"]
+                ))
+            else:
+                footprint = cuboid_footprint_latlon(
+                    item["latitude"], item["longitude"], item["length_x_m"],
+                    item["width_y_m"], item["azimuth_deg"],
+                )
+                folium.Polygon(
+                    footprint, color="#1f6f55", weight=3, fill=True,
+                    fill_color="#9fc8ba", fill_opacity=0.72, tooltip=safe_name,
+                ).add_to(shadow_map)
+                map_bounds.extend(footprint)
+        if map_bounds:
+            shadow_map.fit_bounds(map_bounds, padding=(30, 30))
+        Fullscreen(position="topright").add_to(shadow_map)
+        st_folium(
+            shadow_map,
+            key=f"shadow_result_map_{st.session_state.get('shadow_result_signature', 'preview')}",
+            height=650, use_container_width=True, returned_objects=[],
+        )
+
+        if result is not None:
+            metric_one, metric_two, metric_three = st.columns(3)
+            metric_one.metric("Main shadow envelope", f"{result['solid'].area / 10_000:,.2f} ha")
+            metric_two.metric("Additional flicker-risk area", f"{result['flicker'].area / 10_000:,.2f} ha")
+            metric_three.metric("Relevant time steps", f"{result['relevant_steps']:,}")
+            st.caption(
+                f"Calculated using clear-sky GHI ≥ {float(st.session_state.ghi_threshold):g} W/m² "
+                f"at {result['interval_minutes']}-minute intervals. Flat terrain assumed."
+            )
+
+elif active_page == "Export Results":
+    render_navigation()
+    st.title("Export Results")
+    st.info("KMZ and DWG export options will be added in a later step.")
