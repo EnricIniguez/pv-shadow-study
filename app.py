@@ -3,6 +3,7 @@ import folium
 import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as components
+from html import escape
 import uuid
 from branca.element import MacroElement
 from folium.plugins import Fullscreen
@@ -10,9 +11,11 @@ from jinja2 import Template
 from streamlit_folium import st_folium
 
 from object_geometry import (
+    bearing_from_coordinates,
     cuboid_dimension_midpoints,
     cuboid_footprint_latlon,
     cuboid_vertices,
+    footprint_center,
 )
 from solar_data import generate_annual_solar_data, monthly_hourly_ghi_matrix
 
@@ -30,6 +33,20 @@ class SyncDraggedMarker(MacroElement):
         {{ this._parent.get_name() }}.on('dragend', function(event) {
             const position = event.target.getLatLng();
             {{ this._parent._parent.get_name() }}.fire('click', {latlng: position});
+        });
+        {% endmacro %}
+        """
+    )
+
+
+class SyncObjectHandle(MacroElement):
+    """Report a draggable object handle through st_folium's object-click data."""
+
+    _template = Template(
+        """
+        {% macro script(this, kwargs) %}
+        {{ this._parent.get_name() }}.on('dragend', function() {
+            {{ this._parent.get_name() }}.fire('click');
         });
         {% endmacro %}
         """
@@ -687,29 +704,116 @@ elif active_page == "Object Generation":
                 attr="Esri, Maxar, Earthstar Geographics, and the GIS User Community",
                 name="Satellite", overlay=False,
             ).add_to(object_map)
+            all_footprint_points = []
             for item in st.session_state.objects:
                 footprint = cuboid_footprint_latlon(
                     item["latitude"], item["longitude"],
                     item["length_x_m"], item["width_y_m"],
                     item["azimuth_deg"],
                 )
+                all_footprint_points.extend(footprint)
+                centre = footprint_center(footprint)
                 folium.Polygon(
                     locations=footprint,
                     color="#1f6f55", weight=3,
                     fill=True, fill_color="#9fc8ba", fill_opacity=0.48,
                     tooltip=item["name"],
                 ).add_to(object_map)
-                folium.CircleMarker(
-                    [item["latitude"], item["longitude"]], radius=5,
-                    color="#b44747", fill=True, fill_opacity=1,
-                    tooltip=f"{item['name']} origin",
-                ).add_to(object_map)
+                safe_name = escape(item["name"])
+                move_handle = folium.Marker(
+                    centre,
+                    draggable=True,
+                    tooltip=f"Move {item['name']}||{item['id']}",
+                    icon=folium.DivIcon(
+                        icon_size=(34, 34), icon_anchor=(17, 17),
+                        html=(
+                            '<div style="position:relative;width:34px;height:34px;cursor:move">'
+                            '<div style="width:30px;height:30px;border-radius:50%;'
+                            'background:#fffdf9;border:2px solid #1f6f55;color:#1f6f55;'
+                            'display:flex;align-items:center;justify-content:center;'
+                            'font-size:20px;font-weight:800;box-shadow:0 2px 7px #0004">✥</div>'
+                            f'<div style="position:absolute;top:35px;left:50%;transform:translateX(-50%);'
+                            'white-space:nowrap;background:#fffdf9e8;border:1px solid #1f6f55;'
+                            'border-radius:5px;padding:2px 6px;color:#16324a;font-size:12px;'
+                            f'font-weight:700;pointer-events:none">{safe_name}</div></div>'
+                        ),
+                    ),
+                )
+                move_handle.add_child(SyncObjectHandle())
+                move_handle.add_to(object_map)
+
+                rotation_handle = folium.Marker(
+                    [item["latitude"], item["longitude"]],
+                    draggable=True,
+                    tooltip=f"Rotate {item['name']}||{item['id']}",
+                    icon=folium.DivIcon(
+                        icon_size=(28, 28), icon_anchor=(14, 14),
+                        html=(
+                            '<div style="width:26px;height:26px;border-radius:50%;'
+                            'background:#fff7ed;border:2px solid #b47b45;color:#9b642f;'
+                            'display:flex;align-items:center;justify-content:center;'
+                            'font-size:20px;font-weight:800;box-shadow:0 2px 7px #0004;'
+                            'cursor:url(&quot;data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' '
+                            'width=\'28\' height=\'28\'%3E%3Ctext x=\'2\' y=\'23\' font-size=\'24\' '
+                            'fill=\'%2316324a\'%3E%E2%86%BB%3C/text%3E%3C/svg%3E&quot;) 14 14,grab">↻</div>'
+                        ),
+                    ),
+                )
+                rotation_handle.add_child(SyncObjectHandle())
+                rotation_handle.add_to(object_map)
+            if all_footprint_points:
+                object_map.fit_bounds(all_footprint_points, padding=(35, 35))
             Fullscreen(position="topright").add_to(object_map)
-            st_folium(
+            object_map_state = st_folium(
                 object_map, key="saved_objects_map",
                 height=560, use_container_width=True,
-                returned_objects=[],
+                returned_objects=[
+                    "last_object_clicked",
+                    "last_object_clicked_tooltip",
+                ],
             )
+            handle_position = (
+                object_map_state.get("last_object_clicked")
+                if object_map_state else None
+            )
+            handle_tooltip = (
+                object_map_state.get("last_object_clicked_tooltip")
+                if object_map_state else None
+            )
+            if handle_position and handle_tooltip and "||" in handle_tooltip:
+                action_label, object_id = handle_tooltip.rsplit("||", 1)
+                event_signature = (
+                    action_label,
+                    object_id,
+                    round(handle_position["lat"], 7),
+                    round(handle_position["lng"], 7),
+                )
+                if event_signature != st.session_state.get("last_object_map_event"):
+                    st.session_state.last_object_map_event = event_signature
+                    selected = next(
+                        (item for item in st.session_state.objects if item["id"] == object_id),
+                        None,
+                    )
+                    if selected is not None and action_label.startswith("Move "):
+                        old_footprint = cuboid_footprint_latlon(
+                            selected["latitude"], selected["longitude"],
+                            selected["length_x_m"], selected["width_y_m"],
+                            selected["azimuth_deg"],
+                        )
+                        old_centre = footprint_center(old_footprint)
+                        selected["latitude"] += handle_position["lat"] - old_centre[0]
+                        selected["longitude"] += handle_position["lng"] - old_centre[1]
+                        st.rerun()
+                    if selected is not None and action_label.startswith("Rotate "):
+                        displacement = abs(handle_position["lat"] - selected["latitude"]) + abs(
+                            handle_position["lng"] - selected["longitude"]
+                        )
+                        if displacement > 1e-8:
+                            selected["azimuth_deg"] = bearing_from_coordinates(
+                                selected["latitude"], selected["longitude"],
+                                handle_position["lat"], handle_position["lng"],
+                            )
+                            st.rerun()
 
 elif active_page in ("Shadow Study", "Export Results"):
     render_navigation()
