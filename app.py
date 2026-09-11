@@ -239,10 +239,25 @@ def navigate_to(page: str) -> None:
         st.query_params["page"] = page
 
 
+def committed_site_coordinates() -> tuple[float, float]:
+    """Return the immutable coordinates used by calculations after Site completion."""
+    return (
+        float(st.session_state.get("site_latitude", st.session_state.latitude)),
+        float(st.session_state.get("site_longitude", st.session_state.longitude)),
+    )
+
+
+def begin_site_location_edit() -> None:
+    """Explicitly unlock the site coordinates for intentional modification."""
+    st.session_state.site_completed = False
+    st.session_state.site_location_editing = True
+    st.session_state.pop("site_data", None)
+    invalidate_shadow_study()
+
+
 def distance_from_site_km(latitude: float, longitude: float) -> float:
     """Return great-circle distance from the study site to an object."""
-    site_latitude = float(st.session_state.latitude)
-    site_longitude = float(st.session_state.longitude)
+    site_latitude, site_longitude = committed_site_coordinates()
     latitude_delta = radians(latitude - site_latitude)
     longitude_delta = radians(longitude - site_longitude)
     value = (
@@ -257,8 +272,8 @@ def distance_from_site_km(latitude: float, longitude: float) -> float:
 def distance_acknowledgement_signature(latitude: float, longitude: float) -> str:
     """Bind a distance acknowledgement to both site and object coordinates."""
     values = (
-        round(float(st.session_state.latitude), 5),
-        round(float(st.session_state.longitude), 5),
+        round(committed_site_coordinates()[0], 5),
+        round(committed_site_coordinates()[1], 5),
         round(float(latitude), 5),
         round(float(longitude), 5),
     )
@@ -372,6 +387,9 @@ def mark_site_complete() -> None:
         round(float(st.session_state.latitude), 5),
         round(float(st.session_state.longitude), 5),
     )
+    st.session_state.site_latitude = float(st.session_state.latitude)
+    st.session_state.site_longitude = float(st.session_state.longitude)
+    st.session_state.site_location_editing = False
     st.session_state.site_completed = True
     st.session_state.completion_notice = "Site Creation"
 
@@ -410,12 +428,9 @@ def open_object_form(item: dict | None = None, index: int | None = None) -> None
     st.session_state.form_cuboid_x = float(item.get("length_x_m", 20.0))
     st.session_state.form_cuboid_y = float(item.get("width_y_m", 10.0))
     st.session_state.form_cuboid_z = float(item.get("height_z_m", 8.0))
-    st.session_state.form_object_latitude = float(
-        item.get("latitude", st.session_state.latitude)
-    )
-    st.session_state.form_object_longitude = float(
-        item.get("longitude", st.session_state.longitude)
-    )
+    site_latitude, site_longitude = committed_site_coordinates()
+    st.session_state.form_object_latitude = float(item.get("latitude", site_latitude))
+    st.session_state.form_object_longitude = float(item.get("longitude", site_longitude))
     st.session_state.form_object_azimuth = float(item.get("azimuth_deg", 90.0))
     st.session_state.form_mast_radius = float(item.get("mast_radius_m", 3.0))
     st.session_state.form_mast_height = float(item.get("mast_height_m", 120.0))
@@ -830,8 +845,17 @@ if "longitude" not in st.session_state:
     st.session_state.longitude = 2.1686
 if "pending_coordinates" in st.session_state:
     pending_latitude, pending_longitude = st.session_state.pop("pending_coordinates")
-    st.session_state.latitude = pending_latitude
-    st.session_state.longitude = pending_longitude
+    if not st.session_state.get("site_completed", False):
+        st.session_state.latitude = pending_latitude
+        st.session_state.longitude = pending_longitude
+if (
+    st.session_state.get("site_completed", False)
+    and not st.session_state.get("site_location_editing", False)
+    and "site_latitude" in st.session_state
+):
+    # Restore the committed coordinates before any page widgets or calculations run.
+    st.session_state.latitude = float(st.session_state.site_latitude)
+    st.session_state.longitude = float(st.session_state.site_longitude)
 
 
 active_page = st.query_params.get("page", "Home")
@@ -878,20 +902,30 @@ elif active_page == "Site Creation":
     st.title("Site Creation")
     st.caption("Representative annual clear-sky study for the selected location")
 
+    site_locked = (
+        st.session_state.get("site_completed", False)
+        and not st.session_state.get("site_location_editing", False)
+    )
     with st.sidebar:
         st.header("Study location")
         latitude = st.number_input(
             "Latitude (°)", min_value=-90.0, max_value=90.0,
-            step=0.00001, format="%.5f", key="latitude"
+            step=0.00001, format="%.5f", key="latitude", disabled=site_locked,
         )
         longitude = st.number_input(
             "Longitude (°)", min_value=-180.0, max_value=180.0,
-            step=0.00001, format="%.5f", key="longitude"
+            step=0.00001, format="%.5f", key="longitude", disabled=site_locked,
         )
         calculate = st.button(
             "Calculate annual data", type="primary", width="stretch",
-            on_click=mark_site_complete
+            disabled=site_locked,
         )
+        if site_locked:
+            st.success("Site coordinates locked for this study.")
+            st.button(
+                "Change site location", width="stretch",
+                on_click=begin_site_location_edit,
+            )
 
     site_signature = (
         round(float(latitude), 5),
@@ -916,6 +950,11 @@ elif active_page == "Site Creation":
         st.session_state.site_data = data
         st.session_state.site_completed = True
         st.session_state.site_calculation_signature = site_signature
+        st.session_state.site_latitude = float(latitude)
+        st.session_state.site_longitude = float(longitude)
+        st.session_state.site_location_editing = False
+        st.session_state.completion_notice = "Site Creation"
+        st.rerun()
 
     map_col, summary_col = st.columns([1.4, 1])
     with map_col:
@@ -932,9 +971,12 @@ elif active_page == "Site Creation":
         ).add_to(location_map)
         location_marker = folium.Marker(
             [latitude, longitude],
-            tooltip="Drag to fine-tune the study location",
+            tooltip=(
+                "Site location locked" if site_locked
+                else "Drag to fine-tune the study location"
+            ),
             icon=folium.Icon(color="green", icon="crosshairs", prefix="fa"),
-            draggable=True,
+            draggable=not site_locked,
         )
         location_marker.add_child(SyncDraggedMarker())
         location_marker.add_to(location_map)
@@ -944,7 +986,7 @@ elif active_page == "Site Creation":
             height=500, use_container_width=True
         )
         clicked = map_state.get("last_clicked") if map_state else None
-        if clicked:
+        if clicked and not site_locked:
             clicked_coordinates = (round(clicked["lat"], 6), round(clicked["lng"], 6))
             if clicked_coordinates != st.session_state.get("last_processed_click"):
                 st.session_state.last_processed_click = clicked_coordinates
@@ -1483,6 +1525,7 @@ elif active_page == "Shadow Study":
 
     objects = st.session_state.get("objects", [])
     site_ready = st.session_state.get("site_completed", False)
+    study_latitude, study_longitude = committed_site_coordinates()
     unaccepted_distant_objects = [
         item for item in objects if not object_distance_is_accepted(item)
     ]
@@ -1539,8 +1582,8 @@ elif active_page == "Shadow Study":
             f"Calculating the annual envelope at {interval_minutes}-minute resolution…"
         ):
             solar_data = generate_annual_solar_data(
-                latitude=float(st.session_state.latitude),
-                longitude=float(st.session_state.longitude),
+                latitude=study_latitude,
+                longitude=study_longitude,
                 year=REFERENCE_YEAR,
                 interval_minutes=int(interval_minutes),
                 ghi_threshold=float(ghi_threshold),
@@ -1548,8 +1591,8 @@ elif active_page == "Shadow Study":
             solid_shadow, flicker_risk, relevant_steps = annual_shadow_envelopes(
                 objects,
                 solar_data,
-                float(st.session_state.latitude),
-                float(st.session_state.longitude),
+                study_latitude,
+                study_longitude,
             )
             production_mask = (
                 (solar_data["ghi"] > 0.0)
@@ -1581,8 +1624,8 @@ elif active_page == "Shadow Study":
     if objects:
         st.divider()
         st.subheader("Objects and annual area of effect")
-        reference_latitude = float(st.session_state.latitude)
-        reference_longitude = float(st.session_state.longitude)
+        reference_latitude = study_latitude
+        reference_longitude = study_longitude
         shadow_map = folium.Map(
             location=[reference_latitude, reference_longitude],
             zoom_start=17, tiles=None, control_scale=True,
