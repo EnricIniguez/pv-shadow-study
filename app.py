@@ -292,20 +292,26 @@ elif active_page == "Site Creation":
             st.info("Calculate the annual data to display the site parameters.")
         else:
             annual_ghi = data["ghi"].sum() * float(resolution) / 60 / 1000
-            hours_above_threshold = (
-                data["above_ghi_threshold"].sum() * float(resolution) / 60
+            production_mask = data["ghi"] > 0
+            affected_mask = production_mask & (data["ghi"] < float(ghi_threshold))
+            production_hours = production_mask.sum() * float(resolution) / 60
+            affected_hours = affected_mask.sum() * float(resolution) / 60
+            affected_share = (
+                affected_hours / production_hours * 100
+                if production_hours > 0
+                else 0.0
             )
-            annual_hours_share = hours_above_threshold / 8760 * 100
             st.metric("Annual clear-sky GHI", f"{annual_ghi:,.1f} kWh/m²")
             st.metric("Maximum clear-sky GHI", f"{data['ghi'].max():,.1f} W/m²")
             st.metric(
-                "Hours above GHI threshold",
-                f"{hours_above_threshold:,.1f} h",
+                "Affected hours",
+                f"{affected_hours:,.1f} h",
+                help="Hours with clear-sky GHI above 0 W/m² but below the selected threshold.",
             )
             st.metric(
-                "Share of annual hours",
-                f"{annual_hours_share:.1f}%",
-                help="Percentage relative to 8,760 hours in a 365-day year.",
+                "Affected production hours",
+                f"{affected_share:.1f}%",
+                help="Affected hours as a percentage of all hours with clear-sky GHI above 0 W/m².",
             )
 
     if data is not None:
