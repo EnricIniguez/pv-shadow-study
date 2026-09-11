@@ -290,9 +290,10 @@ elif active_page == "Site Creation":
     if previous_signature is not None and previous_signature != site_signature:
         st.session_state.site_completed = False
         st.session_state.site_calculation_signature = None
+        st.session_state.pop("site_data", None)
         st.rerun()
 
-    data = None
+    data = st.session_state.get("site_data")
     if calculate:
         with st.spinner("Calculating solar position and clear-sky irradiance…"):
             data = generate_annual_solar_data(
@@ -300,6 +301,7 @@ elif active_page == "Site Creation":
                 year=REFERENCE_YEAR, interval_minutes=SITE_INTERVAL_MINUTES,
                 ghi_threshold=float(ghi_threshold),
             )
+        st.session_state.site_data = data
         st.session_state.site_completed = True
         st.session_state.site_calculation_signature = site_signature
 
