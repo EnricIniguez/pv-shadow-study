@@ -299,6 +299,7 @@ def open_object_form(item: dict | None = None, index: int | None = None) -> None
     item = item or {}
     object_type = item.get("type", "Cuboid")
     st.session_state.object_form_visible = True
+    st.session_state.object_form_nonce = st.session_state.get("object_form_nonce", 0) + 1
     st.session_state.editing_object_index = index
     st.session_state.editing_object_id = None if is_new else item["id"]
     st.session_state.object_type = object_type
@@ -306,17 +307,19 @@ def open_object_form(item: dict | None = None, index: int | None = None) -> None
     st.session_state.object_name = (
         next_object_name(object_type) if is_new else item["name"]
     )
-    st.session_state.cuboid_x = float(item.get("length_x_m", 20.0))
-    st.session_state.cuboid_y = float(item.get("width_y_m", 10.0))
-    st.session_state.cuboid_z = float(item.get("height_z_m", 8.0))
-    st.session_state.object_latitude = float(item.get("latitude", st.session_state.latitude))
-    st.session_state.object_longitude = float(item.get("longitude", st.session_state.longitude))
-    st.session_state.object_azimuth = float(item.get("azimuth_deg", 90.0))
-    # Turbine-specific widget keys prevent Streamlit from reusing stale values
-    # when the object-type selector changes from Cuboid to Wind turbine.
-    st.session_state.turbine_mast_radius = float(item.get("mast_radius_m", 3.0))
-    st.session_state.turbine_mast_height = float(item.get("mast_height_m", 120.0))
-    st.session_state.turbine_blade_length = float(item.get("blade_length_m", 70.0))
+    st.session_state.form_cuboid_x = float(item.get("length_x_m", 20.0))
+    st.session_state.form_cuboid_y = float(item.get("width_y_m", 10.0))
+    st.session_state.form_cuboid_z = float(item.get("height_z_m", 8.0))
+    st.session_state.form_object_latitude = float(
+        item.get("latitude", st.session_state.latitude)
+    )
+    st.session_state.form_object_longitude = float(
+        item.get("longitude", st.session_state.longitude)
+    )
+    st.session_state.form_object_azimuth = float(item.get("azimuth_deg", 90.0))
+    st.session_state.form_mast_radius = float(item.get("mast_radius_m", 3.0))
+    st.session_state.form_mast_height = float(item.get("mast_height_m", 120.0))
+    st.session_state.form_blade_length = float(item.get("blade_length_m", 70.0))
 
 
 def edit_saved_object(object_id: str) -> None:
@@ -882,6 +885,7 @@ elif active_page == "Object Generation":
         st.divider()
         editing_index = st.session_state.get("editing_object_index")
         st.subheader("Edit object" if editing_index is not None else "New object")
+        form_nonce = st.session_state.get("object_form_nonce", 0)
         object_type = st.selectbox(
             "Object type", ["Cuboid", "Wind turbine"], key="object_type",
             disabled=editing_index is not None,
@@ -900,26 +904,33 @@ elif active_page == "Object Generation":
                 st.markdown("##### Turbine dimensions")
                 mast_radius = st.number_input(
                     "Mast radius (m)", min_value=0.05, step=0.1,
-                    key="turbine_mast_radius",
+                    value=st.session_state.form_mast_radius,
+                    key=f"turbine_mast_radius_{form_nonce}",
                 )
                 mast_height = st.number_input(
                     "Mast height / hub height (m)", min_value=0.1,
-                    step=1.0, key="turbine_mast_height",
+                    step=1.0, value=st.session_state.form_mast_height,
+                    key=f"turbine_mast_height_{form_nonce}",
                 )
                 blade_length = st.number_input(
                     "Blade length (m)", min_value=0.1, step=1.0,
-                    key="turbine_blade_length",
+                    value=st.session_state.form_blade_length,
+                    key=f"turbine_blade_length_{form_nonce}",
                 )
                 upper_tip_height = mast_height + blade_length
                 st.metric("Calculated upper blade-tip height", f"{upper_tip_height:g} m")
                 st.markdown("##### Mast-centre position")
                 object_latitude = st.number_input(
                     "Origin latitude (°)", min_value=-90.0, max_value=90.0,
-                    step=0.00001, format="%.5f", key="object_latitude",
+                    step=0.00001, format="%.5f",
+                    value=st.session_state.form_object_latitude,
+                    key=f"turbine_latitude_{form_nonce}",
                 )
                 object_longitude = st.number_input(
                     "Origin longitude (°)", min_value=-180.0, max_value=180.0,
-                    step=0.00001, format="%.5f", key="object_longitude",
+                    step=0.00001, format="%.5f",
+                    value=st.session_state.form_object_longitude,
+                    key=f"turbine_longitude_{form_nonce}",
                 )
                 st.caption(
                     "The coordinates define the centre of the mast at ground level. "
@@ -985,29 +996,37 @@ elif active_page == "Object Generation":
                 st.markdown("##### Dimensions")
                 cuboid_x = st.number_input(
                     "X dimension (m)", min_value=0.01,
-                    step=0.5, key="cuboid_x"
+                    step=0.5, value=st.session_state.form_cuboid_x,
+                    key=f"cuboid_x_{form_nonce}",
                 )
                 cuboid_y = st.number_input(
                     "Y dimension (m)", min_value=0.01,
-                    step=0.5, key="cuboid_y"
+                    step=0.5, value=st.session_state.form_cuboid_y,
+                    key=f"cuboid_y_{form_nonce}",
                 )
                 cuboid_z = st.number_input(
                     "Z height (m)", min_value=0.01,
-                    step=0.5, key="cuboid_z"
+                    step=0.5, value=st.session_state.form_cuboid_z,
+                    key=f"cuboid_z_{form_nonce}",
                 )
                 st.markdown("##### Origin position")
                 object_latitude = st.number_input(
                     "Origin latitude (°)", min_value=-90.0, max_value=90.0,
-                    step=0.00001, format="%.5f", key="object_latitude"
+                    step=0.00001, format="%.5f",
+                    value=st.session_state.form_object_latitude,
+                    key=f"cuboid_latitude_{form_nonce}",
                 )
                 object_longitude = st.number_input(
                     "Origin longitude (°)", min_value=-180.0, max_value=180.0,
-                    step=0.00001, format="%.5f", key="object_longitude"
+                    step=0.00001, format="%.5f",
+                    value=st.session_state.form_object_longitude,
+                    key=f"cuboid_longitude_{form_nonce}",
                 )
                 azimuth = st.number_input(
                     "Local X-axis azimuth (°)", min_value=0.0,
                     max_value=359.99, step=1.0,
-                    key="object_azimuth",
+                    value=st.session_state.form_object_azimuth,
+                    key=f"cuboid_azimuth_{form_nonce}",
                     help="Clockwise from North. At 90°, the cuboid's local X-axis points East."
                 )
                 st.caption(
