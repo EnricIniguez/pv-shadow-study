@@ -1,4 +1,4 @@
-# PV Shadow Study
+# PV Butterfly
 
 First application slice for generating annual solar-position and clear-sky
 irradiance data from latitude and longitude.
@@ -12,12 +12,13 @@ irradiance data from latitude and longitude.
 - Ineichen clear-sky GHI, DNI and DHI
 - Configurable clear-sky GHI threshold
 - Monthly-by-hour average clear-sky GHI heatmap in local standard time
-- Annual summary and CSV download
+- Annual and maximum clear-sky GHI site parameters
+- Pastel workflow navigation for Site, Objects, Shadow study and Export
 
 The app uses a fixed 365-day reference year because the current calculation is
 a representative clear-sky study rather than historical weather data. All
-timestamps are currently calculated and exported in UTC. Local time-zone
-handling will be added when the geographic/map workflow is expanded.
+solar calculations use UTC internally, while the heatmap is displayed in local
+standard time without daylight-saving adjustments.
 
 ## Run locally
 
