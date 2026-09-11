@@ -642,6 +642,12 @@ elif active_page == "Object Generation":
                 clean_name = st.session_state.object_name.strip()
                 if not clean_name:
                     st.error("Enter an object name before saving.")
+                elif any(
+                    existing["name"].casefold() == clean_name.casefold()
+                    and index != editing_index
+                    for index, existing in enumerate(st.session_state.objects)
+                ):
+                    st.error("Object names must be unique.")
                 else:
                     saved_object = {
                         "id": (
@@ -727,10 +733,7 @@ elif active_page == "Object Generation":
                 move_handle = folium.Marker(
                     centre,
                     draggable=True,
-                    tooltip=folium.Tooltip(
-                        "Move object"
-                        f'<span style="display:none">||MOVE||{item["id"]}</span>'
-                    ),
+                    tooltip=f"Move object: {safe_name}",
                     icon=folium.DivIcon(
                         icon_size=(34, 34), icon_anchor=(17, 17),
                         html=(
@@ -748,10 +751,7 @@ elif active_page == "Object Generation":
                 rotation_handle = folium.Marker(
                     [item["latitude"], item["longitude"]],
                     draggable=True,
-                    tooltip=folium.Tooltip(
-                        "Rotate object"
-                        f'<span style="display:none">||ROTATE||{item["id"]}</span>'
-                    ),
+                    tooltip=f"Rotate object: {safe_name}",
                     icon=folium.DivIcon(
                         icon_size=(28, 28), icon_anchor=(14, 14),
                         html=(
@@ -786,21 +786,26 @@ elif active_page == "Object Generation":
                 object_map_state.get("last_object_clicked_tooltip")
                 if object_map_state else None
             )
-            if handle_position and handle_tooltip and handle_tooltip.count("||") >= 2:
-                _, action_label, object_id = handle_tooltip.rsplit("||", 2)
+            if handle_position and handle_tooltip and handle_tooltip.startswith(
+                ("Move object: ", "Rotate object: ")
+            ):
+                action_label, object_name = handle_tooltip.split(": ", 1)
                 event_signature = (
                     action_label,
-                    object_id,
+                    object_name,
                     round(handle_position["lat"], 7),
                     round(handle_position["lng"], 7),
                 )
                 if event_signature != st.session_state.get("last_object_map_event"):
                     st.session_state.last_object_map_event = event_signature
                     selected = next(
-                        (item for item in st.session_state.objects if item["id"] == object_id),
+                        (
+                            item for item in st.session_state.objects
+                            if item["name"] == object_name
+                        ),
                         None,
                     )
-                    if selected is not None and action_label == "MOVE":
+                    if selected is not None and action_label == "Move object":
                         old_footprint = cuboid_footprint_latlon(
                             selected["latitude"], selected["longitude"],
                             selected["length_x_m"], selected["width_y_m"],
@@ -810,7 +815,7 @@ elif active_page == "Object Generation":
                         selected["latitude"] += handle_position["lat"] - old_centre[0]
                         selected["longitude"] += handle_position["lng"] - old_centre[1]
                         st.rerun()
-                    if selected is not None and action_label == "ROTATE":
+                    if selected is not None and action_label == "Rotate object":
                         displacement = abs(handle_position["lat"] - selected["latitude"]) + abs(
                             handle_position["lng"] - selected["longitude"]
                         )
