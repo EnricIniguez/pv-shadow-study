@@ -100,7 +100,9 @@ def _union_in_batches(polygons: list[Polygon], batch_size: int = 600) -> Polygon
 def annual_shadow_envelopes(objects: list[dict], solar_data, reference_latitude: float, reference_longitude: float):
     """Calculate annual solid-shadow and turbine flicker-risk envelopes."""
     relevant = solar_data[
-        solar_data["above_ghi_threshold"] & (solar_data["apparent_elevation"] > 0.5)
+        solar_data["above_ghi_threshold"]
+        & (solar_data["ghi"] > 0.0)
+        & (solar_data["apparent_elevation"] > 0.0)
     ]
     solid_polygons: list[Polygon] = []
     rotor_polygons: list[Polygon] = []
