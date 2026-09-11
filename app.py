@@ -3,12 +3,20 @@ import folium
 import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as components
+from urllib.parse import urlencode
+from urllib.request import urlopen
+import json
+import uuid
 from branca.element import MacroElement
 from folium.plugins import Fullscreen
 from jinja2 import Template
 from streamlit_folium import st_folium
 
-from object_geometry import cuboid_dimension_midpoints, cuboid_vertices
+from object_geometry import (
+    cuboid_dimension_midpoints,
+    cuboid_footprint_latlon,
+    cuboid_vertices,
+)
 from solar_data import generate_annual_solar_data, monthly_hourly_ghi_matrix
 
 
@@ -84,31 +92,59 @@ def mark_site_complete() -> None:
     st.session_state.completion_notice = "Site Creation"
 
 
-def mark_object_complete() -> None:
-    """Save the current cuboid definition and mark the workspace complete."""
-    signature = (
-        st.session_state.object_type,
-        float(st.session_state.cuboid_x),
-        float(st.session_state.cuboid_y),
-        float(st.session_state.cuboid_z),
-        float(st.session_state.object_position_x),
-        float(st.session_state.object_position_y),
-        float(st.session_state.object_ground_elevation),
-        float(st.session_state.object_azimuth),
+@st.cache_data(ttl=86_400, show_spinner=False)
+def fetch_copernicus_elevation(latitude: float, longitude: float) -> float:
+    """Fetch approximate Copernicus GLO-90 elevation through Open-Meteo."""
+    query = urlencode({"latitude": latitude, "longitude": longitude})
+    with urlopen(f"https://api.open-meteo.com/v1/elevation?{query}", timeout=8) as response:
+        payload = json.load(response)
+    elevations = payload.get("elevation")
+    if not elevations or elevations[0] is None:
+        raise ValueError("No elevation was returned for these coordinates.")
+    return float(elevations[0])
+
+
+def next_object_name(object_type: str) -> str:
+    """Return the next unused sequential default name for an object type."""
+    prefix = object_type.lower()
+    numbers = []
+    for item in st.session_state.get("objects", []):
+        name = item.get("name", "").lower()
+        if name.startswith(f"{prefix} "):
+            try:
+                numbers.append(int(name.removeprefix(f"{prefix} ")))
+            except ValueError:
+                pass
+    counters = st.session_state.setdefault("object_name_counters", {})
+    next_number = max(counters.get(object_type, 0), max(numbers, default=0)) + 1
+    counters[object_type] = next_number
+    return f"{object_type.lower()} {next_number}"
+
+
+def open_object_form(item: dict | None = None, index: int | None = None) -> None:
+    """Initialise the editor for a new or saved object."""
+    is_new = item is None
+    item = item or {}
+    object_type = item.get("type", "Cuboid")
+    st.session_state.object_form_visible = True
+    st.session_state.editing_object_index = index
+    st.session_state.object_type = object_type
+    st.session_state.object_name = (
+        next_object_name(object_type) if is_new else item["name"]
     )
-    st.session_state.object_signature = signature
-    st.session_state.object_definition = {
-        "type": "Cuboid",
-        "length_x_m": signature[1],
-        "width_y_m": signature[2],
-        "height_z_m": signature[3],
-        "position_x_m": signature[4],
-        "position_y_m": signature[5],
-        "ground_elevation_m": signature[6],
-        "azimuth_deg": signature[7],
-    }
-    st.session_state.object_completed = True
-    st.session_state.completion_notice = "Object Generation"
+    st.session_state.cuboid_x = float(item.get("length_x_m", 20.0))
+    st.session_state.cuboid_y = float(item.get("width_y_m", 10.0))
+    st.session_state.cuboid_z = float(item.get("height_z_m", 8.0))
+    st.session_state.object_latitude = float(item.get("latitude", st.session_state.latitude))
+    st.session_state.object_longitude = float(item.get("longitude", st.session_state.longitude))
+    st.session_state.object_ground_elevation = float(item.get("ground_elevation_m", 0.0))
+    st.session_state.object_azimuth = float(item.get("azimuth_deg", 90.0))
+    st.session_state.elevation_coordinates = (
+        None if is_new else (
+            round(st.session_state.object_latitude, 5),
+            round(st.session_state.object_longitude, 5),
+        )
+    )
 
 
 def render_cuboid_preview(vertices, dimensions) -> None:
@@ -524,81 +560,209 @@ elif active_page == "Object Generation":
     render_navigation()
     st.title("Object Generation")
     st.caption("Define and preview the objects that will cast shadows")
+    if "objects" not in st.session_state:
+        st.session_state.objects = []
 
-    if not st.session_state.get("object_form_visible", False):
-        st.info("No object has been created yet.")
-        if st.button("Create object", type="primary"):
-            st.session_state.object_form_visible = True
+    action_col, count_col = st.columns([1, 3])
+    with action_col:
+        if st.button("Create new object", type="primary", width="stretch"):
+            open_object_form()
             st.rerun()
-    else:
+    with count_col:
+        object_count = len(st.session_state.objects)
+        st.caption(f"{object_count} saved object{'s' if object_count != 1 else ''}")
+
+    if st.session_state.get("object_form_visible", False):
+        st.divider()
+        editing_index = st.session_state.get("editing_object_index")
+        st.subheader("Edit object" if editing_index is not None else "New object")
         object_type = st.selectbox(
             "Object type", ["Cuboid", "Wind turbine"], key="object_type"
         )
+        st.text_input("Object name", key="object_name")
+
         if object_type == "Wind turbine":
             st.info("Wind-turbine geometry will be added in the next development step.")
+            if st.button("Cancel"):
+                st.session_state.object_form_visible = False
+                st.rerun()
         else:
-            controls, preview = st.columns([0.78, 1.65], gap="large")
+            controls, preview = st.columns([0.82, 1.65], gap="large")
             with controls:
-                st.subheader("Cuboid dimensions")
+                st.markdown("##### Dimensions")
                 cuboid_x = st.number_input(
-                    "X dimension (m)", min_value=0.01, value=20.0,
+                    "X dimension (m)", min_value=0.01,
                     step=0.5, key="cuboid_x"
                 )
                 cuboid_y = st.number_input(
-                    "Y dimension (m)", min_value=0.01, value=10.0,
+                    "Y dimension (m)", min_value=0.01,
                     step=0.5, key="cuboid_y"
                 )
                 cuboid_z = st.number_input(
-                    "Z height (m)", min_value=0.01, value=8.0,
+                    "Z height (m)", min_value=0.01,
                     step=0.5, key="cuboid_z"
                 )
-                st.subheader("Position")
-                object_position_x = st.number_input(
-                    "X position · East from Site origin (m)",
-                    value=0.0, step=1.0, key="object_position_x"
+                st.markdown("##### Origin position")
+                object_latitude = st.number_input(
+                    "Origin latitude (°)", min_value=-90.0, max_value=90.0,
+                    step=0.00001, format="%.5f", key="object_latitude"
                 )
-                object_position_y = st.number_input(
-                    "Y position · North from Site origin (m)",
-                    value=0.0, step=1.0, key="object_position_y"
+                object_longitude = st.number_input(
+                    "Origin longitude (°)", min_value=-180.0, max_value=180.0,
+                    step=0.00001, format="%.5f", key="object_longitude"
                 )
+
+                coordinate_signature = (
+                    round(float(object_latitude), 5),
+                    round(float(object_longitude), 5),
+                )
+                if st.session_state.get("elevation_coordinates") != coordinate_signature:
+                    try:
+                        with st.spinner("Retrieving Copernicus elevation…"):
+                            elevation = fetch_copernicus_elevation(
+                                object_latitude, object_longitude
+                            )
+                        st.session_state.object_ground_elevation = elevation
+                        st.session_state.elevation_coordinates = coordinate_signature
+                        st.session_state.elevation_error = None
+                    except Exception:
+                        st.session_state.elevation_error = (
+                            "Elevation could not be retrieved. Enter it manually or retry later."
+                        )
+
                 ground_elevation = st.number_input(
-                    "Ground elevation (m)", value=0.0, step=0.1,
+                    "Ground elevation Z (m)", step=0.1,
                     key="object_ground_elevation",
-                    help="Approximate Copernicus elevation will be connected in the next step. This value remains editable."
+                    help="Automatically obtained from Copernicus DEM GLO-90 and editable if better survey data is available."
                 )
+                if st.session_state.get("elevation_error"):
+                    st.warning(st.session_state.elevation_error)
+                else:
+                    st.caption("Approximate Copernicus DEM GLO-90 elevation · 90 m resolution")
+
                 azimuth = st.number_input(
                     "Local X-axis azimuth (°)", min_value=0.0,
-                    max_value=359.99, value=90.0, step=1.0,
+                    max_value=359.99, step=1.0,
                     key="object_azimuth",
                     help="Clockwise from North. At 90°, the cuboid's local X-axis points East."
                 )
                 st.caption(
-                    "The insertion point is the highlighted footprint corner. "
-                    "The cuboid rotates around this point."
-                )
-                st.button(
-                    "Save object", type="primary", width="stretch",
-                    on_click=mark_object_complete,
+                    "Latitude, longitude and Z define the highlighted insertion corner. "
+                    "The cuboid rotates around this origin."
                 )
 
-            signature = (
-                object_type, float(cuboid_x), float(cuboid_y), float(cuboid_z),
-                float(object_position_x), float(object_position_y),
-                float(ground_elevation), float(azimuth),
-            )
-            previous_object_signature = st.session_state.get("object_signature")
-            if previous_object_signature is not None and previous_object_signature != signature:
-                st.session_state.object_completed = False
-                st.session_state.object_definition = None
+                save_col, cancel_col = st.columns(2)
+                save_clicked = save_col.button(
+                    "Save object", type="primary", width="stretch"
+                )
+                cancel_clicked = cancel_col.button("Cancel", width="stretch")
 
             vertices = cuboid_vertices(
                 cuboid_x, cuboid_y, cuboid_z,
-                object_position_x, object_position_y,
-                ground_elevation, azimuth,
+                ground_elevation=ground_elevation, azimuth=azimuth,
             )
             with preview:
                 st.subheader("Live 3D preview")
                 render_cuboid_preview(vertices, (cuboid_x, cuboid_y, cuboid_z))
+
+            if cancel_clicked:
+                st.session_state.object_form_visible = False
+                st.rerun()
+            if save_clicked:
+                clean_name = st.session_state.object_name.strip()
+                if not clean_name:
+                    st.error("Enter an object name before saving.")
+                else:
+                    saved_object = {
+                        "id": (
+                            st.session_state.objects[editing_index]["id"]
+                            if editing_index is not None else str(uuid.uuid4())
+                        ),
+                        "name": clean_name,
+                        "type": "Cuboid",
+                        "length_x_m": float(cuboid_x),
+                        "width_y_m": float(cuboid_y),
+                        "height_z_m": float(cuboid_z),
+                        "latitude": float(object_latitude),
+                        "longitude": float(object_longitude),
+                        "ground_elevation_m": float(ground_elevation),
+                        "azimuth_deg": float(azimuth),
+                    }
+                    was_complete = bool(st.session_state.objects)
+                    if editing_index is None:
+                        st.session_state.objects.append(saved_object)
+                    else:
+                        st.session_state.objects[editing_index] = saved_object
+                    st.session_state.object_completed = True
+                    st.session_state.object_form_visible = False
+                    st.session_state.editing_object_index = None
+                    if not was_complete:
+                        st.session_state.completion_notice = "Object Generation"
+                    st.rerun()
+
+    if st.session_state.objects:
+        st.divider()
+        list_col, map_col = st.columns([0.9, 1.55], gap="large")
+        with list_col:
+            st.subheader("Saved objects")
+            for index, item in enumerate(st.session_state.objects):
+                with st.container(border=True):
+                    st.markdown(f"**{item['name']}** · {item['type']}")
+                    st.caption(
+                        f"{item['length_x_m']:g} × {item['width_y_m']:g} × "
+                        f"{item['height_z_m']:g} m · Azimuth {item['azimuth_deg']:g}°"
+                    )
+                    st.caption(
+                        f"Origin: {item['latitude']:.5f}, {item['longitude']:.5f} · "
+                        f"Z {item['ground_elevation_m']:.1f} m"
+                    )
+                    edit_col, delete_col = st.columns(2)
+                    if edit_col.button("Edit", key=f"edit_{item['id']}", width="stretch"):
+                        open_object_form(item, index)
+                        st.rerun()
+                    if delete_col.button(
+                        "Delete", key=f"delete_{item['id']}", width="stretch"
+                    ):
+                        st.session_state.objects.pop(index)
+                        st.session_state.object_completed = bool(st.session_state.objects)
+                        st.rerun()
+
+        with map_col:
+            st.subheader("Object locations")
+            centre_latitude = sum(item["latitude"] for item in st.session_state.objects) / len(st.session_state.objects)
+            centre_longitude = sum(item["longitude"] for item in st.session_state.objects) / len(st.session_state.objects)
+            object_map = folium.Map(
+                location=[centre_latitude, centre_longitude],
+                zoom_start=18, tiles=None, control_scale=True,
+            )
+            folium.TileLayer(
+                tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+                attr="Esri, Maxar, Earthstar Geographics, and the GIS User Community",
+                name="Satellite", overlay=False,
+            ).add_to(object_map)
+            for item in st.session_state.objects:
+                footprint = cuboid_footprint_latlon(
+                    item["latitude"], item["longitude"],
+                    item["length_x_m"], item["width_y_m"],
+                    item["azimuth_deg"],
+                )
+                folium.Polygon(
+                    locations=footprint,
+                    color="#1f6f55", weight=3,
+                    fill=True, fill_color="#9fc8ba", fill_opacity=0.48,
+                    tooltip=item["name"],
+                ).add_to(object_map)
+                folium.CircleMarker(
+                    [item["latitude"], item["longitude"]], radius=5,
+                    color="#b44747", fill=True, fill_opacity=1,
+                    tooltip=f"{item['name']} origin",
+                ).add_to(object_map)
+            Fullscreen(position="topright").add_to(object_map)
+            st_folium(
+                object_map, key="saved_objects_map",
+                height=560, use_container_width=True,
+                returned_objects=[],
+            )
 
 elif active_page in ("Shadow Study", "Export Results"):
     render_navigation()
