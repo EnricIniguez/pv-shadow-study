@@ -6,7 +6,7 @@ irradiance data from latitude and longitude.
 ## Current features
 
 - Latitude and longitude inputs with coordinate validation
-- Interactive location map
+- Interactive satellite map with click-to-select coordinates
 - 1, 5 or 15-minute annual time series
 - Solar azimuth and apparent elevation calculated with pvlib
 - Ineichen clear-sky GHI, DNI and DHI
@@ -22,4 +22,3 @@ handling will be added when the geographic/map workflow is expanded.
 python -m pip install -r requirements.txt
 streamlit run app.py
 ```
-
