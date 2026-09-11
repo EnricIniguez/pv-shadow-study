@@ -9,12 +9,9 @@ def cuboid_vertices(
     length_x: float,
     width_y: float,
     height_z: float,
-    position_x: float = 0.0,
-    position_y: float = 0.0,
-    ground_elevation: float = 0.0,
     azimuth: float = 90.0,
 ) -> np.ndarray:
-    """Return cuboid vertices in global East, North, Up coordinates.
+    """Return cuboid vertices on a flat local East, North, Up plane.
 
     The insertion point is the first footprint corner. Local +X follows the
     supplied azimuth clockwise from North; local +Y completes a right-handed
@@ -26,7 +23,7 @@ def cuboid_vertices(
     angle = radians(azimuth)
     local_x = np.array([sin(angle), cos(angle)])
     local_y = np.array([-cos(angle), sin(angle)])
-    origin_xy = np.array([position_x, position_y])
+    origin_xy = np.array([0.0, 0.0])
 
     footprint = np.array(
         [
@@ -36,7 +33,7 @@ def cuboid_vertices(
             origin_xy + width_y * local_y,
         ]
     )
-    bottom = np.column_stack((footprint, np.full(4, ground_elevation)))
+    bottom = np.column_stack((footprint, np.zeros(4)))
     top = bottom.copy()
     top[:, 2] += height_z
     return np.vstack((bottom, top))
