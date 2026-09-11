@@ -229,12 +229,20 @@ class LiveRotateHandle(MacroElement):
 PAGES = ("Site Creation", "Object Generation", "Shadow Study", "Export Results")
 
 
+def navigate_to(page: str) -> None:
+    """Navigate without reloading the browser, preserving the active session."""
+    if page == "Home":
+        st.query_params.clear()
+    else:
+        st.query_params["page"] = page
+
+
 def render_navigation(home: bool = False) -> None:
-    """Render the pastel workflow navigation."""
+    """Render session-preserving workflow navigation."""
     if not home:
-        st.markdown(
-            '<a class="main-menu" href="?" target="_self">⌂&nbsp;&nbsp;Main menu</a>',
-            unsafe_allow_html=True,
+        st.button(
+            "⌂  Main menu", key=f"main_menu_{st.query_params.get('page', 'home')}",
+            on_click=navigate_to, args=("Home",),
         )
     site_complete = st.session_state.get("site_completed", False)
     object_complete = st.session_state.get("object_completed", False)
@@ -246,26 +254,19 @@ def render_navigation(home: bool = False) -> None:
         ("Shadow Study", "🌤️", "shadow", shadow_complete, True),
         ("Export Results", "📦", "export", export_unlocked, export_unlocked),
     ]
-    size_class = " home" if home else ""
-    items = []
-    for label, icon, css_class, completed, enabled in links:
-        status = "✓" if completed else ""
-        content = (
-            f'<span class="nav-icon">{icon}</span><span class="nav-label">{label}</span>'
-            f'<span class="nav-status{" completed" if completed else ""}" '
-            f'title="{"Completed" if completed else "Not completed"}">{status}</span>'
+    columns = st.columns(2 if home else 4, gap="medium")
+    key_context = "home" if home else str(st.query_params.get("page", "workspace"))
+    for index, (label, icon, css_class, completed, enabled) in enumerate(links):
+        status = "  ✓" if completed else ""
+        columns[index % len(columns)].button(
+            f"{icon}  {label}{status}",
+            key=f"nav_{css_class}_{key_context}",
+            disabled=not enabled,
+            type="primary" if completed else "secondary",
+            width="stretch",
+            on_click=navigate_to,
+            args=(label,),
         )
-        if enabled:
-            items.append(
-                f'<a class="{css_class}" href="?page={label.replace(" ", "%20")}" '
-                f'target="_self">{content}</a>'
-            )
-        else:
-            items.append(f'<div class="{css_class} disabled">{content}</div>')
-    st.markdown(
-        f'<nav class="pv-nav{size_class}">{"".join(items)}</nav>',
-        unsafe_allow_html=True,
-    )
 
 
 def mark_site_complete() -> None:
@@ -702,6 +703,21 @@ st.markdown(
             color: #a1a7ad !important;
             filter: grayscale(1);
             opacity: .62;
+        }
+        [class*="st-key-nav_site_"] button { background: #cfe8dc !important; }
+        [class*="st-key-nav_objects_"] button { background: #d9e5f2 !important; }
+        [class*="st-key-nav_shadow_"] button { background: #f7dfb9 !important; }
+        [class*="st-key-nav_export_"] button { background: #eadcf0 !important; }
+        [class*="st-key-nav_export_"] button:disabled {
+            color: #9ba1a7 !important;
+            background: #e5e7e9 !important;
+            border-color: #d5d8da !important;
+            opacity: .68;
+        }
+        [class*="st-key-nav_"][class*="_home"] button {
+            min-height: 7rem;
+            font-size: 1.18rem;
+            font-weight: 700;
         }
         @media (max-width: 720px) {
             .pv-nav, .pv-nav.home { grid-template-columns: repeat(2, minmax(0, 1fr)); }
