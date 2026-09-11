@@ -1724,8 +1724,9 @@ elif active_page == "Shadow Study":
                 f"({result['relevant_steps']:,} relevant time steps). Flat terrain assumed."
             )
             st.caption(
-                "Displayed boundaries are straight-line generalisations of the exact "
-                "timestamp union. Reported areas use the unsmoothed geometry."
+                "The annual edge connects equivalent first, highest-sun and last "
+                "shadow limits between consecutive solar days. Evening and following-"
+                "morning limits are never connected to each other."
             )
 
 elif active_page == "Export Results":
