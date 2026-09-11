@@ -274,7 +274,6 @@ def mark_site_complete() -> None:
     st.session_state.site_calculation_signature = (
         round(float(st.session_state.latitude), 5),
         round(float(st.session_state.longitude), 5),
-        float(st.session_state.ghi_threshold),
     )
     st.session_state.site_completed = True
     st.session_state.completion_notice = "Site Creation"
@@ -364,12 +363,13 @@ def reset_project() -> None:
     st.query_params.clear()
 
 
-def shadow_study_signature(interval_minutes: int) -> str:
+def shadow_study_signature(interval_minutes: int, ghi_threshold: float) -> str:
     """Return a stable signature of every input affecting the shadow result."""
     payload = {
         "site": st.session_state.get("site_calculation_signature"),
         "objects": st.session_state.get("objects", []),
         "interval_minutes": interval_minutes,
+        "ghi_threshold": ghi_threshold,
     }
     encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()[:16]
@@ -791,10 +791,6 @@ elif active_page == "Site Creation":
             "Longitude (°)", min_value=-180.0, max_value=180.0,
             step=0.00001, format="%.5f", key="longitude"
         )
-        ghi_threshold = st.number_input(
-            "Clear-sky GHI threshold (W/m²)", min_value=0.0,
-            max_value=1400.0, value=100.0, step=10.0, key="ghi_threshold"
-        )
         calculate = st.button(
             "Calculate annual data", type="primary", width="stretch",
             on_click=mark_site_complete
@@ -803,7 +799,6 @@ elif active_page == "Site Creation":
     site_signature = (
         round(float(latitude), 5),
         round(float(longitude), 5),
-        float(ghi_threshold),
     )
     previous_signature = st.session_state.get("site_calculation_signature")
     if previous_signature is not None and previous_signature != site_signature:
@@ -819,7 +814,7 @@ elif active_page == "Site Creation":
             data = generate_annual_solar_data(
                 latitude=latitude, longitude=longitude,
                 year=REFERENCE_YEAR, interval_minutes=SITE_INTERVAL_MINUTES,
-                ghi_threshold=float(ghi_threshold),
+                ghi_threshold=0.0,
             )
         st.session_state.site_data = data
         st.session_state.site_completed = True
@@ -865,27 +860,8 @@ elif active_page == "Site Creation":
             st.info("Calculate the annual data to display the site parameters.")
         else:
             annual_ghi = data["ghi"].sum() * SITE_INTERVAL_MINUTES / 60 / 1000
-            production_mask = data["ghi"] > 0
-            affected_mask = production_mask & (data["ghi"] < float(ghi_threshold))
-            production_hours = production_mask.sum() * SITE_INTERVAL_MINUTES / 60
-            affected_hours = affected_mask.sum() * SITE_INTERVAL_MINUTES / 60
-            affected_share = (
-                affected_hours / production_hours * 100
-                if production_hours > 0
-                else 0.0
-            )
             st.metric("Annual clear-sky GHI", f"{annual_ghi:,.1f} kWh/m²")
             st.metric("Maximum clear-sky GHI", f"{data['ghi'].max():,.1f} W/m²")
-            st.metric(
-                "Affected production hours",
-                f"{affected_hours:,.1f} h",
-                help="Hours with clear-sky GHI above 0 W/m² but below the selected threshold.",
-            )
-            st.metric(
-                "Affected production hours (%)",
-                f"{affected_share:.1f}%",
-                help="Affected hours as a percentage of all hours with clear-sky GHI above 0 W/m².",
-            )
 
     if data is not None:
         st.subheader("Average clear-sky GHI by month and hour")
@@ -1396,6 +1372,11 @@ elif active_page == "Shadow Study":
             format_func=lambda value: f"{value} minute{'s' if value != 1 else ''}",
             key="shadow_interval_minutes",
         )
+        ghi_threshold = st.number_input(
+            "Clear-sky GHI threshold (W/m²)", min_value=0.0,
+            max_value=1400.0, value=100.0, step=10.0,
+            key="shadow_ghi_threshold",
+        )
         st.caption(
             "15 minutes is fastest. Use 1 minute for the final high-resolution study."
         )
@@ -1408,10 +1389,13 @@ elif active_page == "Shadow Study":
             "**Area interpretation**  \n"
             "The main shadow layer contains cuboids and turbine masts. The separate "
             "flicker-risk layer treats each turbine rotor as a continuously swept disc. "
-            "It indicates potential blade flicker and is not a full exclusion area."
+            "It indicates potential blade flicker and is not a full exclusion area.  \n\n"
+            "Every boundary point defining each 3D object is projected for every valid "
+            "sun position. The map displays only the resulting external envelope, not "
+            "the individual timestamp polygons or projected points."
         )
 
-    current_signature = shadow_study_signature(interval_minutes)
+    current_signature = shadow_study_signature(interval_minutes, float(ghi_threshold))
     if st.session_state.get("shadow_result_signature") != current_signature:
         st.session_state.pop("shadow_result", None)
         st.session_state.shadow_completed = False
@@ -1425,7 +1409,7 @@ elif active_page == "Shadow Study":
                 longitude=float(st.session_state.longitude),
                 year=REFERENCE_YEAR,
                 interval_minutes=int(interval_minutes),
-                ghi_threshold=float(st.session_state.ghi_threshold),
+                ghi_threshold=float(ghi_threshold),
             )
             solid_shadow, flicker_risk, relevant_steps = annual_shadow_envelopes(
                 objects,
@@ -1433,11 +1417,25 @@ elif active_page == "Shadow Study":
                 float(st.session_state.latitude),
                 float(st.session_state.longitude),
             )
+            production_mask = (
+                (solar_data["ghi"] > 0.0)
+                & (solar_data["apparent_elevation"] > 0.0)
+            )
+            affected_mask = production_mask & (solar_data["ghi"] < float(ghi_threshold))
+            production_hours = float(production_mask.sum()) * interval_minutes / 60
+            affected_hours = float(affected_mask.sum()) * interval_minutes / 60
+            affected_share = (
+                affected_hours / production_hours * 100.0
+                if production_hours > 0 else 0.0
+            )
         st.session_state.shadow_result = {
             "solid": solid_shadow,
             "flicker": flicker_risk,
             "relevant_steps": relevant_steps,
             "interval_minutes": int(interval_minutes),
+            "ghi_threshold": float(ghi_threshold),
+            "affected_hours": affected_hours,
+            "affected_share": affected_share,
         }
         st.session_state.shadow_result_signature = current_signature
         was_complete = st.session_state.get("shadow_completed", False)
@@ -1504,13 +1502,21 @@ elif active_page == "Shadow Study":
         )
 
         if result is not None:
-            metric_one, metric_two, metric_three = st.columns(3)
+            metric_one, metric_two, metric_three, metric_four = st.columns(4)
             metric_one.metric("Main shadow envelope", f"{result['solid'].area / 10_000:,.2f} ha")
             metric_two.metric("Additional flicker-risk area", f"{result['flicker'].area / 10_000:,.2f} ha")
-            metric_three.metric("Relevant time steps", f"{result['relevant_steps']:,}")
+            metric_three.metric(
+                "Affected production hours", f"{result['affected_hours']:,.1f} h",
+                help="Production hours with clear-sky GHI below the selected threshold.",
+            )
+            metric_four.metric(
+                "Affected production hours (%)", f"{result['affected_share']:.1f}%",
+                help="Affected hours divided by all positive-GHI production hours.",
+            )
             st.caption(
-                f"Calculated using clear-sky GHI ≥ {float(st.session_state.ghi_threshold):g} W/m² "
-                f"at {result['interval_minutes']}-minute intervals. Flat terrain assumed."
+                f"Calculated using clear-sky GHI ≥ {result['ghi_threshold']:g} W/m² "
+                f"at {result['interval_minutes']}-minute intervals "
+                f"({result['relevant_steps']:,} relevant time steps). Flat terrain assumed."
             )
 
 elif active_page == "Export Results":
