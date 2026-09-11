@@ -98,7 +98,12 @@ def _union_in_batches(polygons: list[Polygon], batch_size: int = 600) -> Polygon
 
 
 def annual_shadow_envelopes(objects: list[dict], solar_data, reference_latitude: float, reference_longitude: float):
-    """Calculate annual solid-shadow and turbine flicker-risk envelopes."""
+    """Calculate continuous annual solid-shadow and flicker-risk envelopes.
+
+    Consecutive projected polygons are joined by their swept convex envelope.
+    This represents the continuous movement between samples without bridging
+    across irradiance-filtered periods or night-time gaps.
+    """
     relevant = solar_data[
         solar_data["above_ghi_threshold"]
         & (solar_data["ghi"] > 0.0)
@@ -106,20 +111,55 @@ def annual_shadow_envelopes(objects: list[dict], solar_data, reference_latitude:
     ]
     solid_polygons: list[Polygon] = []
     rotor_polygons: list[Polygon] = []
-    for row in relevant.itertuples():
-        elevation = float(row.apparent_elevation)
-        azimuth = float(row.azimuth)
-        for item in objects:
+    if len(solar_data.index) > 1:
+        nominal_step_seconds = (
+            solar_data.index[1] - solar_data.index[0]
+        ).total_seconds()
+    else:
+        nominal_step_seconds = 0.0
+
+    for item in objects:
+        previous_time = None
+        previous_solid = None
+        previous_rotor = None
+        for row in relevant.itertuples():
+            elevation = float(row.apparent_elevation)
+            azimuth = float(row.azimuth)
             if item["type"] == "Wind turbine":
-                mast, rotor = turbine_shadow_polygons(
+                current_solid, current_rotor = turbine_shadow_polygons(
                     item, elevation, azimuth, reference_latitude, reference_longitude
                 )
-                solid_polygons.append(mast)
-                rotor_polygons.append(rotor)
             else:
-                solid_polygons.append(cuboid_shadow_polygon(
+                current_solid = cuboid_shadow_polygon(
                     item, elevation, azimuth, reference_latitude, reference_longitude
-                ))
+                )
+                current_rotor = None
+
+            current_time = row.Index
+            contiguous = (
+                previous_time is not None
+                and nominal_step_seconds > 0
+                and (current_time - previous_time).total_seconds()
+                <= nominal_step_seconds * 1.05
+            )
+            if contiguous:
+                # The convex hull of two consecutive convex projections is the
+                # conservative swept area between them, removing serrated gaps.
+                solid_polygons.append(
+                    unary_union([previous_solid, current_solid]).convex_hull
+                )
+                if current_rotor is not None and previous_rotor is not None:
+                    rotor_polygons.append(
+                        unary_union([previous_rotor, current_rotor]).convex_hull
+                    )
+            else:
+                solid_polygons.append(current_solid)
+                if current_rotor is not None:
+                    rotor_polygons.append(current_rotor)
+
+            previous_time = current_time
+            previous_solid = current_solid
+            previous_rotor = current_rotor
     solid = _union_in_batches(solid_polygons)
     rotor = _union_in_batches(rotor_polygons)
     flicker_only = rotor.difference(solid) if not rotor.is_empty else rotor
