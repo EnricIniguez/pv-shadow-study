@@ -2,6 +2,7 @@ import altair as alt
 import folium
 import hashlib
 import json
+from math import asin, cos, radians, sin, sqrt
 import numpy as np
 import plotly.graph_objects as go
 import streamlit as st
@@ -27,6 +28,7 @@ from shadow_geometry import annual_shadow_envelopes, geometry_to_latlon_rings
 
 REFERENCE_YEAR = 2025
 SITE_INTERVAL_MINUTES = 15
+DISTANT_OBJECT_THRESHOLD_KM = 50.0
 
 
 class SyncDraggedMarker(MacroElement):
@@ -235,6 +237,101 @@ def navigate_to(page: str) -> None:
         st.query_params.clear()
     else:
         st.query_params["page"] = page
+
+
+def distance_from_site_km(latitude: float, longitude: float) -> float:
+    """Return great-circle distance from the study site to an object."""
+    site_latitude = float(st.session_state.latitude)
+    site_longitude = float(st.session_state.longitude)
+    latitude_delta = radians(latitude - site_latitude)
+    longitude_delta = radians(longitude - site_longitude)
+    value = (
+        sin(latitude_delta / 2) ** 2
+        + cos(radians(site_latitude))
+        * cos(radians(latitude))
+        * sin(longitude_delta / 2) ** 2
+    )
+    return 2 * 6_371.0088 * asin(sqrt(value))
+
+
+def distance_acknowledgement_signature(latitude: float, longitude: float) -> str:
+    """Bind a distance acknowledgement to both site and object coordinates."""
+    values = (
+        round(float(st.session_state.latitude), 5),
+        round(float(st.session_state.longitude), 5),
+        round(float(latitude), 5),
+        round(float(longitude), 5),
+    )
+    return hashlib.sha256(repr(values).encode("utf-8")).hexdigest()[:16]
+
+
+def object_distance_is_accepted(item: dict) -> bool:
+    """Return whether an object is near the site or its distance was accepted."""
+    if distance_from_site_km(item["latitude"], item["longitude"]) <= DISTANT_OBJECT_THRESHOLD_KM:
+        return True
+    expected = distance_acknowledgement_signature(item["latitude"], item["longitude"])
+    return item.get("distance_acknowledgement") == expected
+
+
+def accept_saved_object_distance(object_id: str) -> None:
+    """Acknowledge the current distance of one already-saved object."""
+    for item in st.session_state.get("objects", []):
+        if item["id"] == object_id:
+            item["distance_acknowledgement"] = distance_acknowledgement_signature(
+                item["latitude"], item["longitude"]
+            )
+            st.session_state.object_completed = all(
+                object_distance_is_accepted(candidate)
+                for candidate in st.session_state.get("objects", [])
+            )
+            invalidate_shadow_study()
+            return
+
+
+def require_distance_acceptance(
+    save_clicked: bool, latitude: float, longitude: float, form_nonce: int
+) -> tuple[bool, str | None]:
+    """Pause a save until the user explicitly accepts a distance over 50 km."""
+    distance_km = distance_from_site_km(latitude, longitude)
+    if distance_km <= DISTANT_OBJECT_THRESHOLD_KM:
+        st.session_state.pop("pending_distance_warning", None)
+        return save_clicked, None
+
+    signature = distance_acknowledgement_signature(latitude, longitude)
+    editing_id = st.session_state.get("editing_object_id")
+    existing = next(
+        (item for item in st.session_state.get("objects", []) if item["id"] == editing_id),
+        None,
+    )
+    if existing and existing.get("distance_acknowledgement") == signature:
+        return save_clicked, signature
+    if save_clicked:
+        st.session_state.pending_distance_warning = signature
+        st.toast(
+            f"Object is {distance_km:,.1f} km from the study site.", icon="⚠️"
+        )
+    if st.session_state.get("pending_distance_warning") != signature:
+        return False, None
+
+    st.error(
+        f"This object is {distance_km:,.1f} km from the Site Creation coordinates, "
+        f"exceeding the {DISTANT_OBJECT_THRESHOLD_KM:g} km warning threshold. "
+        "Confirm that these coordinates are intentional before continuing."
+    )
+    accept_col, cancel_col = st.columns(2)
+    accepted = accept_col.button(
+        "Accept distance and save", type="primary", width="stretch",
+        key=f"accept_distance_{form_nonce}",
+    )
+    if cancel_col.button(
+        "Review coordinates", width="stretch", key=f"review_distance_{form_nonce}"
+    ):
+        st.session_state.pop("pending_distance_warning", None)
+        st.rerun()
+    if accepted:
+        st.session_state.pop("pending_distance_warning", None)
+        return True, signature
+    return False, None
 
 
 def render_navigation(home: bool = False) -> None:
@@ -906,6 +1003,24 @@ elif active_page == "Object Generation":
     if "object_map_revision" not in st.session_state:
         st.session_state.object_map_revision = 0
 
+    unaccepted_distant_objects = [
+        item for item in st.session_state.objects
+        if not object_distance_is_accepted(item)
+    ]
+    if unaccepted_distant_objects:
+        st.session_state.object_completed = False
+        st.error(
+            "One or more objects are over 50 km from the study site. "
+            "Accept each distance before continuing to Shadow Study."
+        )
+        for item in unaccepted_distant_objects:
+            distance_km = distance_from_site_km(item["latitude"], item["longitude"])
+            st.button(
+                f"Accept {item['name']} at {distance_km:,.1f} km",
+                key=f"accept_saved_distance_{item['id']}",
+                on_click=accept_saved_object_distance, args=(item["id"],),
+            )
+
     action_col, count_col = st.columns([1, 3])
     with action_col:
         if st.button("Create new object", type="primary", width="stretch"):
@@ -985,7 +1100,10 @@ elif active_page == "Object Generation":
                 st.session_state.editing_object_index = None
                 st.session_state.editing_object_id = None
                 st.rerun()
-            if save_clicked:
+            save_authorized, distance_acknowledgement = require_distance_acceptance(
+                save_clicked, object_latitude, object_longitude, form_nonce
+            )
+            if save_authorized:
                 clean_name = st.session_state.object_name.strip()
                 if not clean_name:
                     st.error("Enter an object name before saving.")
@@ -1006,6 +1124,7 @@ elif active_page == "Object Generation":
                         "upper_tip_height_m": float(upper_tip_height),
                         "latitude": float(object_latitude),
                         "longitude": float(object_longitude),
+                        "distance_acknowledgement": distance_acknowledgement,
                     }
                     was_complete = bool(st.session_state.objects)
                     editing_object_id = st.session_state.get("editing_object_id")
@@ -1088,7 +1207,10 @@ elif active_page == "Object Generation":
                 st.session_state.editing_object_index = None
                 st.session_state.editing_object_id = None
                 st.rerun()
-            if save_clicked:
+            save_authorized, distance_acknowledgement = require_distance_acceptance(
+                save_clicked, object_latitude, object_longitude, form_nonce
+            )
+            if save_authorized:
                 clean_name = st.session_state.object_name.strip()
                 if not clean_name:
                     st.error("Enter an object name before saving.")
@@ -1109,6 +1231,7 @@ elif active_page == "Object Generation":
                         "latitude": float(object_latitude),
                         "longitude": float(object_longitude),
                         "azimuth_deg": float(azimuth),
+                        "distance_acknowledgement": distance_acknowledgement,
                     }
                     was_complete = bool(st.session_state.objects)
                     editing_object_id = st.session_state.get("editing_object_id")
@@ -1329,6 +1452,8 @@ elif active_page == "Object Generation":
                             old_centre = footprint_center(old_footprint)
                             selected["latitude"] += handle_position["lat"] - old_centre[0]
                             selected["longitude"] += handle_position["lng"] - old_centre[1]
+                        selected["distance_acknowledgement"] = None
+                        st.session_state.object_completed = object_distance_is_accepted(selected)
                         st.session_state.object_map_revision += 1
                         invalidate_shadow_study()
                         st.rerun()
@@ -1358,11 +1483,20 @@ elif active_page == "Shadow Study":
 
     objects = st.session_state.get("objects", [])
     site_ready = st.session_state.get("site_completed", False)
-    object_ready = bool(objects)
+    unaccepted_distant_objects = [
+        item for item in objects if not object_distance_is_accepted(item)
+    ]
+    object_ready = bool(objects) and not unaccepted_distant_objects
     if not site_ready:
         st.warning("Complete and calculate Site Creation before running the shadow study.")
     if not object_ready:
-        st.warning("Create at least one object before running the shadow study.")
+        if not objects:
+            st.warning("Create at least one object before running the shadow study.")
+        else:
+            names = ", ".join(item["name"] for item in unaccepted_distant_objects)
+            st.error(
+                f"Return to Object Generation and accept the over-50-km warning for: {names}."
+            )
 
     control_col, explanation_col = st.columns([0.72, 2.1], gap="large")
     with control_col:
