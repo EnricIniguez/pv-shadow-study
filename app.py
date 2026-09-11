@@ -40,7 +40,7 @@ def render_navigation(home: bool = False) -> None:
     ]
     size_class = " home" if home else ""
     items = "".join(
-        f'<a class="{css_class}" href="?page={label.replace(" ", "%20")}">'
+        f'<a class="{css_class}" href="?page={label.replace(" ", "%20")}" target="_self">'
         f'<span>{icon}</span>{label}</a>'
         for label, icon, css_class in links
     )
