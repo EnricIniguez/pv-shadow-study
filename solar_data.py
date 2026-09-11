@@ -5,7 +5,11 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pvlib
-from timezonefinder import TimezoneFinder
+
+try:
+    from timezonefinder import TimezoneFinder
+except ImportError:  # Keep the app available while cloud dependencies rebuild.
+    TimezoneFinder = None
 
 
 VALID_INTERVALS = {1, 5, 15}
@@ -56,14 +60,19 @@ def monthly_hourly_ghi_matrix(
     data: pd.DataFrame, latitude: float, longitude: float
 ) -> tuple[pd.DataFrame, str, float]:
     """Average clear-sky GHI by month and hour in local standard time."""
-    timezone_name = TimezoneFinder().timezone_at(lat=latitude, lng=longitude) or "UTC"
-    site_timezone = ZoneInfo(timezone_name)
-    year = int(data.index[0].year)
-    monthly_offsets = [
-        datetime(year, month, 15, 12, tzinfo=UTC).astimezone(site_timezone).utcoffset()
-        for month in range(1, 13)
-    ]
-    standard_offset = min(offset for offset in monthly_offsets if offset is not None)
+    if TimezoneFinder is not None:
+        timezone_name = TimezoneFinder().timezone_at(lat=latitude, lng=longitude) or "UTC"
+        site_timezone = ZoneInfo(timezone_name)
+        year = int(data.index[0].year)
+        monthly_offsets = [
+            datetime(year, month, 15, 12, tzinfo=UTC).astimezone(site_timezone).utcoffset()
+            for month in range(1, 13)
+        ]
+        standard_offset = min(offset for offset in monthly_offsets if offset is not None)
+    else:
+        approximate_hours = max(-12, min(14, round(longitude / 15)))
+        standard_offset = pd.Timedelta(hours=approximate_hours).to_pytimedelta()
+        timezone_name = "longitude-based local time"
     standard_timezone = timezone(standard_offset)
 
     local_index = data.index.tz_convert(standard_timezone)
