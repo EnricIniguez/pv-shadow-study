@@ -113,7 +113,10 @@ def soften_envelope_boundary(geometry, interval_minutes: int, flicker: bool = Fa
     return softened if softened.is_valid else softened.buffer(0)
 
 
-def annual_shadow_envelopes(objects: list[dict], solar_data, reference_latitude: float, reference_longitude: float):
+def annual_shadow_envelopes(
+    objects: list[dict], solar_data, reference_latitude: float,
+    reference_longitude: float, boundary_solar_data=None,
+):
     """Calculate continuous annual solid-shadow and flicker-risk envelopes.
 
     Consecutive projected polygons are joined by their swept convex envelope.
@@ -125,6 +128,12 @@ def annual_shadow_envelopes(objects: list[dict], solar_data, reference_latitude:
         & (solar_data["ghi"] > 0.0)
         & (solar_data["apparent_elevation"] > 0.0)
     ]
+    boundary_source = solar_data if boundary_solar_data is None else boundary_solar_data
+    boundary_relevant = boundary_source[
+        boundary_source["above_ghi_threshold"]
+        & (boundary_source["ghi"] > 0.0)
+        & (boundary_source["apparent_elevation"] > 0.0)
+    ]
     solid_polygons: list[Polygon] = []
     rotor_polygons: list[Polygon] = []
     if len(solar_data.index) > 1:
@@ -135,46 +144,27 @@ def annual_shadow_envelopes(objects: list[dict], solar_data, reference_latitude:
         nominal_step_seconds = 0.0
 
     for item in objects:
-        previous_time = None
-        previous_solid = None
-        previous_rotor = None
-        daily_endpoints = {}
-        for row in relevant.itertuples():
+        def project(row):
             elevation = float(row.apparent_elevation)
             azimuth = float(row.azimuth)
             if item["type"] == "Wind turbine":
-                current_solid, current_rotor = turbine_shadow_polygons(
+                return turbine_shadow_polygons(
                     item, elevation, azimuth, reference_latitude, reference_longitude
                 )
-            else:
-                current_solid = cuboid_shadow_polygon(
+            return (
+                cuboid_shadow_polygon(
                     item, elevation, azimuth, reference_latitude, reference_longitude
-                )
-                current_rotor = None
+                ),
+                None,
+            )
+
+        previous_time = None
+        previous_solid = None
+        previous_rotor = None
+        for row in relevant.itertuples():
+            current_solid, current_rotor = project(row)
 
             current_time = row.Index
-            # Use a longitude-based solar-local date so daylight periods are
-            # not split merely because the source timestamps are in UTC.
-            solar_day = (
-                current_time + timedelta(hours=reference_longitude / 15.0)
-            ).date()
-            if solar_day not in daily_endpoints:
-                daily_endpoints[solar_day] = {
-                    "first_solid": current_solid,
-                    "last_solid": current_solid,
-                    "first_rotor": current_rotor,
-                    "last_rotor": current_rotor,
-                    "peak_solid": current_solid,
-                    "peak_rotor": current_rotor,
-                    "peak_elevation": elevation,
-                }
-            else:
-                daily_endpoints[solar_day]["last_solid"] = current_solid
-                daily_endpoints[solar_day]["last_rotor"] = current_rotor
-                if elevation > daily_endpoints[solar_day]["peak_elevation"]:
-                    daily_endpoints[solar_day]["peak_solid"] = current_solid
-                    daily_endpoints[solar_day]["peak_rotor"] = current_rotor
-                    daily_endpoints[solar_day]["peak_elevation"] = elevation
             contiguous = (
                 previous_time is not None
                 and nominal_step_seconds > 0
@@ -199,6 +189,31 @@ def annual_shadow_envelopes(objects: list[dict], solar_data, reference_latitude:
             previous_time = current_time
             previous_solid = current_solid
             previous_rotor = current_rotor
+
+        # Derive daily edge anchors from the refined boundary time series.
+        # This prevents 15-minute threshold crossings from jumping between
+        # quarter-hour slots and producing a repeating annual saw-tooth.
+        daily_endpoints = {}
+        solar_days = [
+            (timestamp + timedelta(hours=reference_longitude / 15.0)).date()
+            for timestamp in boundary_relevant.index
+        ]
+        for solar_day, day_rows in boundary_relevant.groupby(solar_days):
+            first_row = next(day_rows.iloc[[0]].itertuples())
+            last_row = next(day_rows.iloc[[-1]].itertuples())
+            peak_index = day_rows["apparent_elevation"].argmax()
+            peak_row = next(day_rows.iloc[[peak_index]].itertuples())
+            first_solid, first_rotor = project(first_row)
+            last_solid, last_rotor = project(last_row)
+            peak_solid, peak_rotor = project(peak_row)
+            daily_endpoints[solar_day] = {
+                "first_solid": first_solid,
+                "last_solid": last_solid,
+                "first_rotor": first_rotor,
+                "last_rotor": last_rotor,
+                "peak_solid": peak_solid,
+                "peak_rotor": peak_rotor,
+            }
 
         # Join like-for-like daily endpoints. This removes the annual row of
         # daily teeth without ever drawing a bridge from evening to morning.
