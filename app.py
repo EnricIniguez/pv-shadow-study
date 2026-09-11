@@ -1,6 +1,7 @@
 import altair as alt
 import folium
 import streamlit as st
+import streamlit.components.v1 as components
 from branca.element import MacroElement
 from folium.plugins import Fullscreen
 from jinja2 import Template
@@ -51,10 +52,11 @@ def render_navigation(home: bool = False) -> None:
     size_class = " home" if home else ""
     items = []
     for label, icon, css_class, completed, enabled in links:
-        status = "😊" if completed else "☹️"
+        status = "✓" if completed else ""
         content = (
             f'<span class="nav-icon">{icon}</span><span class="nav-label">{label}</span>'
-            f'<span class="nav-status" title="{"Completed" if completed else "Not completed"}">{status}</span>'
+            f'<span class="nav-status{" completed" if completed else ""}" '
+            f'title="{"Completed" if completed else "Not completed"}">{status}</span>'
         )
         if enabled:
             items.append(
@@ -77,6 +79,41 @@ def mark_site_complete() -> None:
         float(st.session_state.ghi_threshold),
     )
     st.session_state.site_completed = True
+    st.session_state.completion_notice = "Site Creation"
+
+
+def render_completion_notice() -> None:
+    """Show a one-time completion toast and play a short confirmation tone."""
+    completed_page = st.session_state.pop("completion_notice", None)
+    if not completed_page:
+        return
+    st.toast(f"{completed_page} has been completed", icon="✅")
+    components.html(
+        """
+        <script>
+        (() => {
+            try {
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                const context = new AudioContext();
+                const oscillator = context.createOscillator();
+                const gain = context.createGain();
+                oscillator.type = "sine";
+                oscillator.frequency.setValueAtTime(660, context.currentTime);
+                oscillator.frequency.exponentialRampToValueAtTime(880, context.currentTime + 0.14);
+                gain.gain.setValueAtTime(0.055, context.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, context.currentTime + 0.2);
+                oscillator.connect(gain);
+                gain.connect(context.destination);
+                oscillator.start();
+                oscillator.stop(context.currentTime + 0.2);
+            } catch (error) {
+                // The visual confirmation remains available if a browser blocks audio.
+            }
+        })();
+        </script>
+        """,
+        height=0,
+    )
 
 
 st.set_page_config(page_title="PV Butterfly", page_icon="🦋", layout="wide")
@@ -152,18 +189,35 @@ st.markdown(
             position: absolute;
             right: .55rem;
             bottom: .4rem;
-            font-size: .9rem;
+            min-width: 1.15rem;
+            min-height: 1.15rem;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: .82rem;
+            font-weight: 800;
+        }
+        .pv-nav .nav-status.completed {
+            color: #ffffff;
+            background: #43a66b;
+            border-radius: 50%;
         }
         .pv-nav .site { background: #cfe8dc; }
         .pv-nav .objects { background: #d9e5f2; }
         .pv-nav .shadow { background: #f7dfb9; }
         .pv-nav .export { background: #eadcf0; }
         .pv-nav .export.disabled {
-            color: #798087;
+            color: #a1a7ad !important;
             background: #e5e7e9;
             border-color: #d5d8da;
             box-shadow: none;
             cursor: not-allowed;
+        }
+        .pv-nav .export.disabled .nav-label,
+        .pv-nav .export.disabled .nav-icon {
+            color: #a1a7ad !important;
+            filter: grayscale(1);
+            opacity: .62;
         }
         @media (max-width: 720px) {
             .pv-nav, .pv-nav.home { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -191,6 +245,8 @@ if active_page == "Export Results" and not all(
     for key in ("site_completed", "object_completed", "shadow_completed")
 ):
     active_page = "Home"
+
+render_completion_notice()
 
 
 if active_page == "Home":
