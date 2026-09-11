@@ -13,7 +13,9 @@ irradiance data from latitude and longitude.
 - Configurable clear-sky GHI threshold
 - Annual summary and CSV download
 
-All timestamps are currently calculated and exported in UTC. Local time-zone
+The app uses a fixed 365-day reference year because the current calculation is
+a representative clear-sky study rather than historical weather data. All
+timestamps are currently calculated and exported in UTC. Local time-zone
 handling will be added when the geographic/map workflow is expanded.
 
 ## Run locally
