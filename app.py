@@ -14,6 +14,8 @@ from folium.plugins import Fullscreen
 from jinja2 import Template
 from streamlit_folium import st_folium
 
+from export_geometry import create_dxf, create_kmz, export_features
+
 from object_geometry import (
     bearing_from_coordinates,
     circle_bounds_latlon,
@@ -488,6 +490,7 @@ def shadow_study_signature(interval_minutes: int, ghi_threshold: float) -> str:
         "objects": st.session_state.get("objects", []),
         "interval_minutes": interval_minutes,
         "ghi_threshold": ghi_threshold,
+        "result_schema": 2,
     }
     encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()[:16]
@@ -1595,12 +1598,13 @@ elif active_page == "Shadow Study":
                 interval_minutes=int(interval_minutes),
                 ghi_threshold=float(ghi_threshold),
             )
-            solid_shadow, flicker_risk, relevant_steps = annual_shadow_envelopes(
+            solid_shadow, flicker_risk, relevant_steps, individual_results = annual_shadow_envelopes(
                 objects,
                 solar_data,
                 study_latitude,
                 study_longitude,
                 boundary_solar_data=solar_data,
+                return_individual=True,
             )
             solid_display = soften_envelope_boundary(
                 solid_shadow, int(interval_minutes), flicker=False
@@ -1622,6 +1626,7 @@ elif active_page == "Shadow Study":
         st.session_state.shadow_result = {
             "solid": solid_shadow,
             "flicker": flicker_risk,
+            "individual": individual_results,
             "solid_display": solid_display,
             "flicker_display": flicker_display,
             "relevant_steps": relevant_steps,
@@ -1731,4 +1736,76 @@ elif active_page == "Shadow Study":
 elif active_page == "Export Results":
     render_navigation()
     st.title("Export Results")
-    st.info("KMZ and DWG export options will be added in a later step.")
+    st.caption(
+        "Export every object and its annual area of effect separately, together "
+        "with overlap-safe combined project boundaries."
+    )
+    result = st.session_state.get("shadow_result")
+    objects = st.session_state.get("objects", [])
+    if result is None or not result.get("individual"):
+        st.warning(
+            "Run Shadow Study again to prepare the individual geometries required for export."
+        )
+    else:
+        reference_latitude, reference_longitude = committed_site_coordinates()
+        features = export_features(
+            objects, result, reference_latitude, reference_longitude
+        )
+        individual_main = sum(
+            1 for name, _, _ in features
+            if not name.startswith("Envelope_") and "_Main_shadow_" in name
+        )
+        individual_flicker = sum(
+            1 for name, _, _ in features
+            if not name.startswith("Envelope_") and "_Flicker_risk_" in name
+        )
+        st.success(
+            f"Ready: {len(objects)} object footprints, {individual_main} individual "
+            f"main-shadow areas and {individual_flicker} individual flicker-risk areas."
+        )
+
+        kmz_data = create_kmz(features, reference_latitude, reference_longitude)
+        dxf_data, projected_crs = create_dxf(
+            features, reference_latitude, reference_longitude
+        )
+        kmz_col, cad_col = st.columns(2, gap="large")
+        with kmz_col:
+            st.subheader("KMZ polygons")
+            st.write(
+                "WGS84 polygons grouped by feature name for Google Earth and GIS software."
+            )
+            st.download_button(
+                "Download KMZ",
+                data=kmz_data,
+                file_name="pv_butterfly_results.kmz",
+                mime="application/vnd.google-earth.kmz",
+                type="primary",
+                width="stretch",
+            )
+        with cad_col:
+            st.subheader("CAD polylines")
+            st.write(
+                f"Closed, metre-based polylines on separate layers in {projected_crs}."
+            )
+            st.download_button(
+                "Download DXF",
+                data=dxf_data,
+                file_name="pv_butterfly_results.dxf",
+                mime="application/dxf",
+                type="primary",
+                width="stretch",
+            )
+            st.caption(
+                "DXF opens directly in AutoCAD and can be saved as DWG. Native DWG "
+                "generation requires a licensed external conversion service, which is "
+                "not included in Streamlit Community Cloud."
+            )
+
+        st.markdown("**Included geometry**")
+        st.markdown(
+            "- One footprint for each saved object\n"
+            "- One main-shadow boundary for each object\n"
+            "- One additional flicker-risk boundary for each wind turbine\n"
+            "- Combined main shadow, combined flicker risk, and combined full area of effect\n\n"
+            "Overlapping polygons are unioned in every combined layer, so shared area is not duplicated."
+        )

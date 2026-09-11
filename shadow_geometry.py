@@ -123,6 +123,7 @@ def soften_envelope_boundary(geometry, interval_minutes: int, flicker: bool = Fa
 def annual_shadow_envelopes(
     objects: list[dict], solar_data, reference_latitude: float,
     reference_longitude: float, boundary_solar_data=None,
+    return_individual: bool = False,
 ):
     """Calculate annual envelopes from geometry-defining solar extremes.
 
@@ -143,6 +144,7 @@ def annual_shadow_envelopes(
     ]
     solid_polygons: list[Polygon] = []
     rotor_polygons: list[Polygon] = []
+    individual_results = []
     azimuth_bin_degrees = 0.25
     envelope_rows = boundary_relevant[["apparent_elevation", "azimuth"]].copy()
     envelope_rows["azimuth_bin"] = np.floor(
@@ -151,6 +153,17 @@ def annual_shadow_envelopes(
     grouped_rows = list(envelope_rows.groupby("azimuth_bin", sort=True))
 
     for item in objects:
+        object_solid_polygons: list[Polygon] = []
+        object_rotor_polygons: list[Polygon] = []
+
+        def keep_solid(polygon):
+            solid_polygons.append(polygon)
+            object_solid_polygons.append(polygon)
+
+        def keep_rotor(polygon):
+            rotor_polygons.append(polygon)
+            object_rotor_polygons.append(polygon)
+
         def project(row):
             elevation = float(row.apparent_elevation)
             azimuth = float(row.azimuth)
@@ -181,18 +194,14 @@ def annual_shadow_envelopes(
                 _swept_hull(low_rotor, high_rotor)
                 if low_rotor is not None and high_rotor is not None else None
             )
-            solid_polygons.append(solid_section)
+            keep_solid(solid_section)
             if rotor_section is not None:
-                rotor_polygons.append(rotor_section)
+                keep_rotor(rotor_section)
 
             if previous_bin is not None and azimuth_bin - previous_bin <= 1:
-                solid_polygons.append(_swept_hull(
-                    previous_solid_section, solid_section
-                ))
+                keep_solid(_swept_hull(previous_solid_section, solid_section))
                 if previous_rotor_section is not None and rotor_section is not None:
-                    rotor_polygons.append(_swept_hull(
-                        previous_rotor_section, rotor_section
-                    ))
+                    keep_rotor(_swept_hull(previous_rotor_section, rotor_section))
 
             if first_section is None:
                 first_section = (azimuth_bin, solid_section, rotor_section)
@@ -208,12 +217,28 @@ def annual_shadow_envelopes(
             first_section is not None and last_section is not None
             and first_section[0] + total_bins - last_section[0] <= 1
         ):
-            solid_polygons.append(_swept_hull(last_section[1], first_section[1]))
+            keep_solid(_swept_hull(last_section[1], first_section[1]))
             if last_section[2] is not None and first_section[2] is not None:
-                rotor_polygons.append(_swept_hull(last_section[2], first_section[2]))
+                keep_rotor(_swept_hull(last_section[2], first_section[2]))
+
+        object_solid = _union_in_batches(object_solid_polygons)
+        object_rotor = _union_in_batches(object_rotor_polygons)
+        object_flicker = (
+            object_rotor.difference(object_solid)
+            if not object_rotor.is_empty else object_rotor
+        )
+        individual_results.append({
+            "id": item.get("id", ""),
+            "name": item.get("name", item.get("type", "Object")),
+            "type": item.get("type", "Object"),
+            "solid": object_solid,
+            "flicker": object_flicker,
+        })
     solid = _union_in_batches(solid_polygons)
     rotor = _union_in_batches(rotor_polygons)
     flicker_only = rotor.difference(solid) if not rotor.is_empty else rotor
+    if return_individual:
+        return solid, flicker_only, len(relevant), individual_results
     return solid, flicker_only, len(relevant)
 
 
