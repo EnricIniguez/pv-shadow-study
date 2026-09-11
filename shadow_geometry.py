@@ -97,6 +97,21 @@ def _union_in_batches(polygons: list[Polygon], batch_size: int = 600) -> Polygon
     return unary_union(batches)
 
 
+def soften_envelope_boundary(geometry, interval_minutes: int, flicker: bool = False):
+    """Generalize a display boundary into logical straight-line segments.
+
+    The exact union remains available for area calculations.  This display
+    geometry removes the small saw-tooth vertices created by discrete solar
+    samples, with a tolerance proportional to the selected time interval.
+    """
+    if geometry.is_empty:
+        return geometry
+    factor = 0.9 if flicker else 0.45
+    tolerance_m = max(0.25, min(14.0, interval_minutes * factor))
+    softened = geometry.simplify(tolerance_m, preserve_topology=True)
+    return softened if softened.is_valid else softened.buffer(0)
+
+
 def annual_shadow_envelopes(objects: list[dict], solar_data, reference_latitude: float, reference_longitude: float):
     """Calculate continuous annual solid-shadow and flicker-risk envelopes.
 
