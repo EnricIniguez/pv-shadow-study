@@ -39,22 +39,138 @@ class SyncDraggedMarker(MacroElement):
     )
 
 
-class SyncObjectHandle(MacroElement):
-    """Report a draggable object handle through st_folium's object-click data."""
+class LiveMoveHandle(MacroElement):
+    """Move a footprint live and report the final centre to Streamlit."""
 
     _template = Template(
         """
         {% macro script(this, kwargs) %}
-        {{ this._parent.get_name() }}.on('dragend', function() {
-            const marker = {{ this._parent.get_name() }};
-            marker.fire('click', {
-                latlng: marker.getLatLng(),
-                sourceTarget: marker
+        {
+        const moveMarker = {{ this.marker.get_name() }};
+        const movePolygon = {{ this.polygon.get_name() }};
+        const originMarker = {{ this.origin_marker.get_name() }};
+        let moveStart = null;
+        let polygonStart = null;
+        let originStart = null;
+        moveMarker.on('dragstart', function() {
+            moveStart = moveMarker.getLatLng();
+            polygonStart = movePolygon.getLatLngs()[0].map(
+                point => L.latLng(point.lat, point.lng)
+            );
+            originStart = originMarker.getLatLng();
+        });
+        moveMarker.on('drag', function() {
+            const current = moveMarker.getLatLng();
+            const latitudeDelta = current.lat - moveStart.lat;
+            const longitudeDelta = current.lng - moveStart.lng;
+            movePolygon.setLatLngs([polygonStart.map(
+                point => L.latLng(
+                    point.lat + latitudeDelta,
+                    point.lng + longitudeDelta
+                )
+            )]);
+            originMarker.setLatLng(L.latLng(
+                originStart.lat + latitudeDelta,
+                originStart.lng + longitudeDelta
+            ));
+        });
+        moveMarker.on('dragend', function() {
+            moveMarker.fire('click', {
+                latlng: moveMarker.getLatLng(),
+                sourceTarget: moveMarker
             });
         });
+        }
         {% endmacro %}
         """
     )
+
+    def __init__(self, marker, polygon, origin_marker):
+        super().__init__()
+        self.marker = marker
+        self.polygon = polygon
+        self.origin_marker = origin_marker
+
+
+class LiveRotateHandle(MacroElement):
+    """Rotate a footprint live about its insertion corner."""
+
+    _template = Template(
+        """
+        {% macro script(this, kwargs) %}
+        {
+        const rotateMarker = {{ this.marker.get_name() }};
+        const rotatePolygon = {{ this.polygon.get_name() }};
+        const centreMarker = {{ this.centre_marker.get_name() }};
+        const lengthX = {{ this.length_x }};
+        const widthY = {{ this.width_y }};
+        let fixedOrigin = null;
+
+        function destination(origin, distance, bearingDegrees) {
+            const radius = 6378137.0;
+            const angularDistance = distance / radius;
+            const bearing = bearingDegrees * Math.PI / 180;
+            const latitude1 = origin.lat * Math.PI / 180;
+            const longitude1 = origin.lng * Math.PI / 180;
+            const latitude2 = Math.asin(
+                Math.sin(latitude1) * Math.cos(angularDistance) +
+                Math.cos(latitude1) * Math.sin(angularDistance) * Math.cos(bearing)
+            );
+            const longitude2 = longitude1 + Math.atan2(
+                Math.sin(bearing) * Math.sin(angularDistance) * Math.cos(latitude1),
+                Math.cos(angularDistance) - Math.sin(latitude1) * Math.sin(latitude2)
+            );
+            return L.latLng(
+                latitude2 * 180 / Math.PI,
+                longitude2 * 180 / Math.PI
+            );
+        }
+
+        function bearing(origin, target) {
+            const latitude1 = origin.lat * Math.PI / 180;
+            const latitude2 = target.lat * Math.PI / 180;
+            const longitudeDelta = (target.lng - origin.lng) * Math.PI / 180;
+            const east = Math.sin(longitudeDelta) * Math.cos(latitude2);
+            const north = (
+                Math.cos(latitude1) * Math.sin(latitude2) -
+                Math.sin(latitude1) * Math.cos(latitude2) * Math.cos(longitudeDelta)
+            );
+            return (Math.atan2(east, north) * 180 / Math.PI + 360) % 360;
+        }
+
+        rotateMarker.on('dragstart', function() {
+            fixedOrigin = rotatePolygon.getLatLngs()[0][0];
+        });
+        rotateMarker.on('drag', function() {
+            const azimuth = bearing(fixedOrigin, rotateMarker.getLatLng());
+            const pointX = destination(fixedOrigin, lengthX, azimuth);
+            const pointY = destination(fixedOrigin, widthY, azimuth - 90);
+            const pointXY = destination(pointX, widthY, azimuth - 90);
+            const corners = [fixedOrigin, pointX, pointXY, pointY];
+            rotatePolygon.setLatLngs([corners]);
+            centreMarker.setLatLng(L.latLng(
+                corners.reduce((sum, point) => sum + point.lat, 0) / 4,
+                corners.reduce((sum, point) => sum + point.lng, 0) / 4
+            ));
+        });
+        rotateMarker.on('dragend', function() {
+            rotateMarker.fire('click', {
+                latlng: rotateMarker.getLatLng(),
+                sourceTarget: rotateMarker
+            });
+        });
+        }
+        {% endmacro %}
+        """
+    )
+
+    def __init__(self, marker, polygon, centre_marker, length_x, width_y):
+        super().__init__()
+        self.marker = marker
+        self.polygon = polygon
+        self.centre_marker = centre_marker
+        self.length_x = float(length_x)
+        self.width_y = float(width_y)
 
 
 PAGES = ("Site Creation", "Object Generation", "Shadow Study", "Export Results")
@@ -724,12 +840,13 @@ elif active_page == "Object Generation":
                 all_footprint_points.extend(footprint)
                 centre = footprint_center(footprint)
                 safe_name = escape(item["name"])
-                folium.Polygon(
+                object_polygon = folium.Polygon(
                     locations=footprint,
                     color="#1f6f55", weight=3,
                     fill=True, fill_color="#9fc8ba", fill_opacity=0.48,
                     tooltip=safe_name,
-                ).add_to(object_map)
+                )
+                object_polygon.add_to(object_map)
                 move_handle = folium.Marker(
                     centre,
                     draggable=True,
@@ -745,9 +862,6 @@ elif active_page == "Object Generation":
                         ),
                     ),
                 )
-                move_handle.add_child(SyncObjectHandle())
-                move_handle.add_to(object_map)
-
                 rotation_handle = folium.Marker(
                     [item["latitude"], item["longitude"]],
                     draggable=True,
@@ -765,8 +879,20 @@ elif active_page == "Object Generation":
                         ),
                     ),
                 )
-                rotation_handle.add_child(SyncObjectHandle())
+                move_handle.add_to(object_map)
                 rotation_handle.add_to(object_map)
+                object_map.add_child(
+                    LiveMoveHandle(move_handle, object_polygon, rotation_handle)
+                )
+                object_map.add_child(
+                    LiveRotateHandle(
+                        rotation_handle,
+                        object_polygon,
+                        move_handle,
+                        item["length_x_m"],
+                        item["width_y_m"],
+                    )
+                )
             if all_footprint_points:
                 object_map.fit_bounds(all_footprint_points, padding=(35, 35))
             Fullscreen(position="topright").add_to(object_map)
