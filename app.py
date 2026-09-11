@@ -1,5 +1,6 @@
 import altair as alt
 import folium
+import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as components
 from branca.element import MacroElement
@@ -7,6 +8,7 @@ from folium.plugins import Fullscreen
 from jinja2 import Template
 from streamlit_folium import st_folium
 
+from object_geometry import cuboid_dimension_midpoints, cuboid_vertices
 from solar_data import generate_annual_solar_data, monthly_hourly_ghi_matrix
 
 
@@ -80,6 +82,123 @@ def mark_site_complete() -> None:
     )
     st.session_state.site_completed = True
     st.session_state.completion_notice = "Site Creation"
+
+
+def mark_object_complete() -> None:
+    """Save the current cuboid definition and mark the workspace complete."""
+    signature = (
+        st.session_state.object_type,
+        float(st.session_state.cuboid_x),
+        float(st.session_state.cuboid_y),
+        float(st.session_state.cuboid_z),
+        float(st.session_state.object_position_x),
+        float(st.session_state.object_position_y),
+        float(st.session_state.object_ground_elevation),
+        float(st.session_state.object_azimuth),
+    )
+    st.session_state.object_signature = signature
+    st.session_state.object_definition = {
+        "type": "Cuboid",
+        "length_x_m": signature[1],
+        "width_y_m": signature[2],
+        "height_z_m": signature[3],
+        "position_x_m": signature[4],
+        "position_y_m": signature[5],
+        "ground_elevation_m": signature[6],
+        "azimuth_deg": signature[7],
+    }
+    st.session_state.object_completed = True
+    st.session_state.completion_notice = "Object Generation"
+
+
+def render_cuboid_preview(vertices, dimensions) -> None:
+    """Render a dimensioned cuboid with its insertion point and global axes."""
+    faces = [
+        (0, 1, 2), (0, 2, 3), (4, 6, 5), (4, 7, 6),
+        (0, 4, 5), (0, 5, 1), (1, 5, 6), (1, 6, 2),
+        (2, 6, 7), (2, 7, 3), (3, 7, 4), (3, 4, 0),
+    ]
+    figure = go.Figure()
+    figure.add_trace(
+        go.Mesh3d(
+            x=vertices[:, 0], y=vertices[:, 1], z=vertices[:, 2],
+            i=[face[0] for face in faces],
+            j=[face[1] for face in faces],
+            k=[face[2] for face in faces],
+            color="#9fc8ba", opacity=0.62, flatshading=True,
+            hoverinfo="skip", showlegend=False,
+        )
+    )
+    edges = [
+        (0, 1), (1, 2), (2, 3), (3, 0),
+        (4, 5), (5, 6), (6, 7), (7, 4),
+        (0, 4), (1, 5), (2, 6), (3, 7),
+    ]
+    for start, end in edges:
+        figure.add_trace(
+            go.Scatter3d(
+                x=[vertices[start, 0], vertices[end, 0]],
+                y=[vertices[start, 1], vertices[end, 1]],
+                z=[vertices[start, 2], vertices[end, 2]],
+                mode="lines", line=dict(color="#254f63", width=4),
+                hoverinfo="skip", showlegend=False,
+            )
+        )
+
+    origin = vertices[0]
+    span = max(dimensions) * 0.42
+    axes = [
+        ("X · East", "#d55e5e", (span, 0, 0)),
+        ("Y · North", "#3a9565", (0, span, 0)),
+        ("Z · Up", "#4d78b8", (0, 0, span)),
+    ]
+    for label, colour, delta in axes:
+        end = origin + delta
+        figure.add_trace(
+            go.Scatter3d(
+                x=[origin[0], end[0]], y=[origin[1], end[1]],
+                z=[origin[2], end[2]], mode="lines+text",
+                line=dict(color=colour, width=7), text=[None, label],
+                textposition="top center", showlegend=False,
+                hoverinfo="skip",
+            )
+        )
+    figure.add_trace(
+        go.Scatter3d(
+            x=[origin[0]], y=[origin[1]], z=[origin[2]],
+            mode="markers+text", marker=dict(size=8, color="#c84848"),
+            text=["ORIGIN"], textposition="bottom center",
+            name="Insertion corner",
+        )
+    )
+
+    midpoints = cuboid_dimension_midpoints(vertices)
+    labels = [
+        (midpoints["x"], f"X = {dimensions[0]:g} m"),
+        (midpoints["y"], f"Y = {dimensions[1]:g} m"),
+        (midpoints["z"], f"Z = {dimensions[2]:g} m"),
+    ]
+    figure.add_trace(
+        go.Scatter3d(
+            x=[item[0][0] for item in labels],
+            y=[item[0][1] for item in labels],
+            z=[item[0][2] for item in labels],
+            mode="text", text=[item[1] for item in labels],
+            textfont=dict(size=13, color="#16324a"),
+            hoverinfo="skip", showlegend=False,
+        )
+    )
+    figure.update_layout(
+        height=610, margin=dict(l=0, r=0, t=15, b=0),
+        paper_bgcolor="rgba(255,255,255,0.76)",
+        scene=dict(
+            xaxis_title="X · East (m)", yaxis_title="Y · North (m)",
+            zaxis_title="Elevation (m)", aspectmode="data",
+            camera=dict(eye=dict(x=1.45, y=1.55, z=1.15)),
+        ),
+        showlegend=False,
+    )
+    st.plotly_chart(figure, width="stretch", config={"displaylogo": False})
 
 
 def render_completion_notice() -> None:
@@ -401,11 +520,90 @@ elif active_page == "Site Creation":
             "Daylight saving time is not considered."
         )
 
-else:
+elif active_page == "Object Generation":
+    render_navigation()
+    st.title("Object Generation")
+    st.caption("Define and preview the objects that will cast shadows")
+
+    if not st.session_state.get("object_form_visible", False):
+        st.info("No object has been created yet.")
+        if st.button("Create object", type="primary"):
+            st.session_state.object_form_visible = True
+            st.rerun()
+    else:
+        object_type = st.selectbox(
+            "Object type", ["Cuboid", "Wind turbine"], key="object_type"
+        )
+        if object_type == "Wind turbine":
+            st.info("Wind-turbine geometry will be added in the next development step.")
+        else:
+            controls, preview = st.columns([0.78, 1.65], gap="large")
+            with controls:
+                st.subheader("Cuboid dimensions")
+                cuboid_x = st.number_input(
+                    "X dimension (m)", min_value=0.01, value=20.0,
+                    step=0.5, key="cuboid_x"
+                )
+                cuboid_y = st.number_input(
+                    "Y dimension (m)", min_value=0.01, value=10.0,
+                    step=0.5, key="cuboid_y"
+                )
+                cuboid_z = st.number_input(
+                    "Z height (m)", min_value=0.01, value=8.0,
+                    step=0.5, key="cuboid_z"
+                )
+                st.subheader("Position")
+                object_position_x = st.number_input(
+                    "X position · East from Site origin (m)",
+                    value=0.0, step=1.0, key="object_position_x"
+                )
+                object_position_y = st.number_input(
+                    "Y position · North from Site origin (m)",
+                    value=0.0, step=1.0, key="object_position_y"
+                )
+                ground_elevation = st.number_input(
+                    "Ground elevation (m)", value=0.0, step=0.1,
+                    key="object_ground_elevation",
+                    help="Approximate Copernicus elevation will be connected in the next step. This value remains editable."
+                )
+                azimuth = st.number_input(
+                    "Local X-axis azimuth (°)", min_value=0.0,
+                    max_value=359.99, value=90.0, step=1.0,
+                    key="object_azimuth",
+                    help="Clockwise from North. At 90°, the cuboid's local X-axis points East."
+                )
+                st.caption(
+                    "The insertion point is the highlighted footprint corner. "
+                    "The cuboid rotates around this point."
+                )
+                st.button(
+                    "Save object", type="primary", width="stretch",
+                    on_click=mark_object_complete,
+                )
+
+            signature = (
+                object_type, float(cuboid_x), float(cuboid_y), float(cuboid_z),
+                float(object_position_x), float(object_position_y),
+                float(ground_elevation), float(azimuth),
+            )
+            previous_object_signature = st.session_state.get("object_signature")
+            if previous_object_signature is not None and previous_object_signature != signature:
+                st.session_state.object_completed = False
+                st.session_state.object_definition = None
+
+            vertices = cuboid_vertices(
+                cuboid_x, cuboid_y, cuboid_z,
+                object_position_x, object_position_y,
+                ground_elevation, azimuth,
+            )
+            with preview:
+                st.subheader("Live 3D preview")
+                render_cuboid_preview(vertices, (cuboid_x, cuboid_y, cuboid_z))
+
+elif active_page in ("Shadow Study", "Export Results"):
     render_navigation()
     st.title(active_page)
     placeholder_text = {
-        "Object Generation": "Object definition will be added in the next development step.",
         "Shadow Study": "Shadow calculations will be added after the object definition.",
         "Export Results": "KMZ and DWG export options will be added in a later step.",
     }
