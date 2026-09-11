@@ -1651,14 +1651,22 @@ elif active_page == "Shadow Study":
             safe_name = escape(item["name"])
             if item["type"] == "Wind turbine":
                 centre = (item["latitude"], item["longitude"])
+                rotor_bounds = circle_bounds_latlon(
+                    item["latitude"], item["longitude"], item["blade_length_m"]
+                )
+                # With the rotor facing North, its true top-down projection is
+                # an East-West diameter centred on the mast.
+                folium.PolyLine(
+                    locations=[rotor_bounds[2], rotor_bounds[3]],
+                    color="#76558f", weight=7, opacity=0.72,
+                    tooltip=f"{safe_name} · horizontal rotor projection",
+                ).add_to(shadow_map)
                 folium.Circle(
-                    centre, radius=item["mast_radius_m"], color="#1f6f55",
-                    weight=3, fill=True, fill_color="#9fc8ba", fill_opacity=0.8,
+                    centre, radius=item["mast_radius_m"], color="#5f3d78",
+                    weight=3, fill=True, fill_color="#c9b5d8", fill_opacity=0.9,
                     tooltip=safe_name,
                 ).add_to(shadow_map)
-                map_bounds.extend(circle_bounds_latlon(
-                    item["latitude"], item["longitude"], item["blade_length_m"]
-                ))
+                map_bounds.extend(rotor_bounds)
             else:
                 footprint = cuboid_footprint_latlon(
                     item["latitude"], item["longitude"], item["length_x_m"],
