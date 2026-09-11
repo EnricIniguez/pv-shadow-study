@@ -1,3 +1,4 @@
+import altair as alt
 import folium
 import streamlit as st
 from branca.element import MacroElement
@@ -5,7 +6,7 @@ from folium.plugins import Fullscreen
 from jinja2 import Template
 from streamlit_folium import st_folium
 
-from solar_data import generate_annual_solar_data
+from solar_data import generate_annual_solar_data, monthly_hourly_ghi_matrix
 
 
 REFERENCE_YEAR = 2025
@@ -152,6 +153,34 @@ if calculate:
     b.metric("Above GHI threshold", f"{len(relevant):,}")
     c.metric("Equivalent selected hours", f"{len(relevant) * resolution / 60:,.1f} h")
 
+    st.subheader("Average clear-sky GHI by month and hour")
+    ghi_matrix, timezone_name, utc_offset = monthly_hourly_ghi_matrix(data, latitude, longitude)
+    heatmap_data = (
+        ghi_matrix.rename_axis("Month")
+        .reset_index()
+        .melt(id_vars="Month", var_name="Hour", value_name="Average GHI")
+    )
+    heatmap = (
+        alt.Chart(heatmap_data)
+        .mark_rect()
+        .encode(
+            x=alt.X("Hour:O", title="Hour of day", sort=list(range(24))),
+            y=alt.Y("Month:N", title=None, sort=list(ghi_matrix.index)),
+            color=alt.Color(
+                "Average GHI:Q",
+                title="GHI (W/m²)",
+                scale=alt.Scale(range=["#f4faf6", "#9bd4b1", "#1e8e5a", "#0b2942"]),
+            ),
+            tooltip=[
+                alt.Tooltip("Month:N"),
+                alt.Tooltip("Hour:O", title="Local standard hour"),
+                alt.Tooltip("Average GHI:Q", title="Average GHI", format=".1f"),
+            ],
+        )
+        .properties(height=360)
+    )
+    st.altair_chart(heatmap, width="stretch")
+
     with st.expander("Preview calculated data"):
         st.dataframe(data.head(100), width="stretch")
 
@@ -160,4 +189,10 @@ if calculate:
         data=data.to_csv().encode("utf-8"),
         file_name=f"clear_sky_{latitude:.4f}_{longitude:.4f}_{resolution}min.csv",
         mime="text/csv",
+    )
+
+    offset_label = f"UTC{utc_offset:+g}"
+    st.caption(
+        f"Time basis: local standard time ({timezone_name}, {offset_label}). "
+        "Daylight saving time is not considered."
     )
