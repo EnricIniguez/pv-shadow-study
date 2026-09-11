@@ -3,9 +3,6 @@ import folium
 import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as components
-from urllib.parse import urlencode
-from urllib.request import urlopen
-import json
 import uuid
 from branca.element import MacroElement
 from folium.plugins import Fullscreen
@@ -92,18 +89,6 @@ def mark_site_complete() -> None:
     st.session_state.completion_notice = "Site Creation"
 
 
-@st.cache_data(ttl=86_400, show_spinner=False)
-def fetch_copernicus_elevation(latitude: float, longitude: float) -> float:
-    """Fetch approximate Copernicus GLO-90 elevation through Open-Meteo."""
-    query = urlencode({"latitude": latitude, "longitude": longitude})
-    with urlopen(f"https://api.open-meteo.com/v1/elevation?{query}", timeout=8) as response:
-        payload = json.load(response)
-    elevations = payload.get("elevation")
-    if not elevations or elevations[0] is None:
-        raise ValueError("No elevation was returned for these coordinates.")
-    return float(elevations[0])
-
-
 def next_object_name(object_type: str) -> str:
     """Return the next unused sequential default name for an object type."""
     prefix = object_type.lower()
@@ -137,14 +122,7 @@ def open_object_form(item: dict | None = None, index: int | None = None) -> None
     st.session_state.cuboid_z = float(item.get("height_z_m", 8.0))
     st.session_state.object_latitude = float(item.get("latitude", st.session_state.latitude))
     st.session_state.object_longitude = float(item.get("longitude", st.session_state.longitude))
-    st.session_state.object_ground_elevation = float(item.get("ground_elevation_m", 0.0))
     st.session_state.object_azimuth = float(item.get("azimuth_deg", 90.0))
-    st.session_state.elevation_coordinates = (
-        None if is_new else (
-            round(st.session_state.object_latitude, 5),
-            round(st.session_state.object_longitude, 5),
-        )
-    )
 
 
 def render_cuboid_preview(vertices, dimensions) -> None:
@@ -229,7 +207,7 @@ def render_cuboid_preview(vertices, dimensions) -> None:
         paper_bgcolor="rgba(255,255,255,0.76)",
         scene=dict(
             xaxis_title="X · East (m)", yaxis_title="Y · North (m)",
-            zaxis_title="Elevation (m)", aspectmode="data",
+            zaxis_title="Height (m)", aspectmode="data",
             camera=dict(eye=dict(x=1.45, y=1.55, z=1.15)),
         ),
         showlegend=False,
@@ -611,35 +589,6 @@ elif active_page == "Object Generation":
                     "Origin longitude (°)", min_value=-180.0, max_value=180.0,
                     step=0.00001, format="%.5f", key="object_longitude"
                 )
-
-                coordinate_signature = (
-                    round(float(object_latitude), 5),
-                    round(float(object_longitude), 5),
-                )
-                if st.session_state.get("elevation_coordinates") != coordinate_signature:
-                    try:
-                        with st.spinner("Retrieving Copernicus elevation…"):
-                            elevation = fetch_copernicus_elevation(
-                                object_latitude, object_longitude
-                            )
-                        st.session_state.object_ground_elevation = elevation
-                        st.session_state.elevation_coordinates = coordinate_signature
-                        st.session_state.elevation_error = None
-                    except Exception:
-                        st.session_state.elevation_error = (
-                            "Elevation could not be retrieved. Enter it manually or retry later."
-                        )
-
-                ground_elevation = st.number_input(
-                    "Ground elevation Z (m)", step=0.1,
-                    key="object_ground_elevation",
-                    help="Automatically obtained from Copernicus DEM GLO-90 and editable if better survey data is available."
-                )
-                if st.session_state.get("elevation_error"):
-                    st.warning(st.session_state.elevation_error)
-                else:
-                    st.caption("Approximate Copernicus DEM GLO-90 elevation · 90 m resolution")
-
                 azimuth = st.number_input(
                     "Local X-axis azimuth (°)", min_value=0.0,
                     max_value=359.99, step=1.0,
@@ -647,8 +596,8 @@ elif active_page == "Object Generation":
                     help="Clockwise from North. At 90°, the cuboid's local X-axis points East."
                 )
                 st.caption(
-                    "Latitude, longitude and Z define the highlighted insertion corner. "
-                    "The cuboid rotates around this origin."
+                    "Latitude and longitude define the highlighted insertion corner. "
+                    "The terrain is horizontal at Z = 0 and the cuboid rotates around this origin."
                 )
 
                 save_col, cancel_col = st.columns(2)
@@ -659,7 +608,7 @@ elif active_page == "Object Generation":
 
             vertices = cuboid_vertices(
                 cuboid_x, cuboid_y, cuboid_z,
-                ground_elevation=ground_elevation, azimuth=azimuth,
+                azimuth=azimuth,
             )
             with preview:
                 st.subheader("Live 3D preview")
@@ -685,7 +634,6 @@ elif active_page == "Object Generation":
                         "height_z_m": float(cuboid_z),
                         "latitude": float(object_latitude),
                         "longitude": float(object_longitude),
-                        "ground_elevation_m": float(ground_elevation),
                         "azimuth_deg": float(azimuth),
                     }
                     was_complete = bool(st.session_state.objects)
@@ -713,8 +661,7 @@ elif active_page == "Object Generation":
                         f"{item['height_z_m']:g} m · Azimuth {item['azimuth_deg']:g}°"
                     )
                     st.caption(
-                        f"Origin: {item['latitude']:.5f}, {item['longitude']:.5f} · "
-                        f"Z {item['ground_elevation_m']:.1f} m"
+                        f"Origin: {item['latitude']:.5f}, {item['longitude']:.5f}"
                     )
                     edit_col, delete_col = st.columns(2)
                     if edit_col.button("Edit", key=f"edit_{item['id']}", width="stretch"):
