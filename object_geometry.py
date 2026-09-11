@@ -79,6 +79,21 @@ def footprint_center(coordinates: list[tuple[float, float]]) -> tuple[float, flo
     )
 
 
+def circle_bounds_latlon(
+    latitude: float, longitude: float, radius_m: float
+) -> list[tuple[float, float]]:
+    """Return cardinal bounds for a small circle centred on a WGS84 point."""
+    earth_radius = 6_378_137.0
+    latitude_delta = radius_m / earth_radius * 180 / pi
+    longitude_delta = radius_m / (earth_radius * cos(radians(latitude))) * 180 / pi
+    return [
+        (latitude - latitude_delta, longitude),
+        (latitude + latitude_delta, longitude),
+        (latitude, longitude - longitude_delta),
+        (latitude, longitude + longitude_delta),
+    ]
+
+
 def bearing_from_coordinates(
     origin_latitude: float,
     origin_longitude: float,
