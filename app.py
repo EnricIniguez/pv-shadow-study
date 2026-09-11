@@ -86,113 +86,142 @@ with st.sidebar:
     )
     calculate = st.button("Calculate annual data", type="primary", width="stretch")
 
-map_col, summary_col = st.columns([1.4, 1])
+site_tab, objects_tab, shadow_tab, export_tab = st.tabs(
+    ["Site", "Objects", "Shadow study", "Export"]
+)
 
-with map_col:
-    st.subheader("Select the study location")
-    st.caption("Click the map to reposition the marker, or drag it for fine adjustment.")
-    location_map = folium.Map(
-        location=[latitude, longitude],
-        zoom_start=17,
-        tiles=None,
-        control_scale=True,
-    )
-    folium.TileLayer(
-        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-        attr="Esri, Maxar, Earthstar Geographics, and the GIS User Community",
-        name="Satellite",
-        overlay=False,
-    ).add_to(location_map)
-    location_marker = folium.Marker(
-        [latitude, longitude],
-        tooltip="Drag to fine-tune the study location",
-        icon=folium.Icon(color="green", icon="crosshairs", prefix="fa"),
-        draggable=True,
-    )
-    location_marker.add_child(SyncDraggedMarker())
-    location_marker.add_to(location_map)
-    Fullscreen(position="topright").add_to(location_map)
-    map_state = st_folium(
-        location_map,
-        key="study_location_map",
-        height=500,
-        use_container_width=True,
-    )
+with site_tab:
+    map_col, summary_col = st.columns([1.4, 1])
 
-    clicked = map_state.get("last_clicked") if map_state else None
-    if clicked:
-        clicked_coordinates = (round(clicked["lat"], 6), round(clicked["lng"], 6))
-        if clicked_coordinates != st.session_state.get("last_processed_click"):
-            st.session_state.last_processed_click = clicked_coordinates
-            st.session_state.pending_coordinates = clicked_coordinates
-            st.rerun()
-
-with summary_col:
-    st.subheader("Current study")
-    st.metric("Coordinates", f"{latitude:.4f}°, {longitude:.4f}°")
-    st.metric("Resolution", f"{resolution} minute{'s' if resolution != 1 else ''}")
-    expected_rows = int(365 * 24 * 60 / resolution)
-    st.metric("Annual timestamps", f"{expected_rows:,}")
-
-if calculate:
-    with st.spinner("Calculating solar position and clear-sky irradiance…"):
-        data = generate_annual_solar_data(
-            latitude=latitude,
-            longitude=longitude,
-            year=REFERENCE_YEAR,
-            interval_minutes=int(resolution),
-            ghi_threshold=float(ghi_threshold),
+    with map_col:
+        st.subheader("Select the study location")
+        st.caption("Click the map to reposition the marker, or drag it for fine adjustment.")
+        location_map = folium.Map(
+            location=[latitude, longitude],
+            zoom_start=17,
+            tiles=None,
+            control_scale=True,
+        )
+        folium.TileLayer(
+            tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+            attr="Esri, Maxar, Earthstar Geographics, and the GIS User Community",
+            name="Satellite",
+            overlay=False,
+        ).add_to(location_map)
+        location_marker = folium.Marker(
+            [latitude, longitude],
+            tooltip="Drag to fine-tune the study location",
+            icon=folium.Icon(color="green", icon="crosshairs", prefix="fa"),
+            draggable=True,
+        )
+        location_marker.add_child(SyncDraggedMarker())
+        location_marker.add_to(location_map)
+        Fullscreen(position="topright").add_to(location_map)
+        map_state = st_folium(
+            location_map,
+            key="study_location_map",
+            height=500,
+            use_container_width=True,
         )
 
-    relevant = data[data["above_ghi_threshold"]]
-    daylight = data[data["apparent_elevation"] > 0]
+        clicked = map_state.get("last_clicked") if map_state else None
+        if clicked:
+            clicked_coordinates = (round(clicked["lat"], 6), round(clicked["lng"], 6))
+            if clicked_coordinates != st.session_state.get("last_processed_click"):
+                st.session_state.last_processed_click = clicked_coordinates
+                st.session_state.pending_coordinates = clicked_coordinates
+                st.rerun()
 
-    st.subheader("Annual result")
-    a, b, c = st.columns(3)
-    a.metric("Daylight timestamps", f"{len(daylight):,}")
-    b.metric("Above GHI threshold", f"{len(relevant):,}")
-    c.metric("Equivalent selected hours", f"{len(relevant) * resolution / 60:,.1f} h")
+    with summary_col:
+        st.subheader("Current study")
+        st.metric("Coordinates", f"{latitude:.5f}°, {longitude:.5f}°")
+        st.metric("Resolution", f"{resolution} minute{'s' if resolution != 1 else ''}")
+        expected_rows = int(365 * 24 * 60 / resolution)
+        st.metric("Annual timestamps", f"{expected_rows:,}")
 
-    st.subheader("Average clear-sky GHI by month and hour")
-    ghi_matrix, timezone_name, utc_offset = monthly_hourly_ghi_matrix(data, latitude, longitude)
-    heatmap_data = (
-        ghi_matrix.rename_axis("Month")
-        .reset_index()
-        .melt(id_vars="Month", var_name="Hour", value_name="Average GHI")
-    )
-    heatmap = (
-        alt.Chart(heatmap_data)
-        .mark_rect()
-        .encode(
-            x=alt.X("Hour:O", title="Hour of day", sort=list(range(24))),
-            y=alt.Y("Month:N", title=None, sort=list(ghi_matrix.index)),
-            color=alt.Color(
-                "Average GHI:Q",
-                title="GHI (W/m²)",
-                scale=alt.Scale(range=["#f4faf6", "#9bd4b1", "#1e8e5a", "#0b2942"]),
-            ),
-            tooltip=[
-                alt.Tooltip("Month:N"),
-                alt.Tooltip("Hour:O", title="Local standard hour"),
-                alt.Tooltip("Average GHI:Q", title="Average GHI", format=".1f"),
-            ],
+    if calculate:
+        with st.spinner("Calculating solar position and clear-sky irradiance…"):
+            data = generate_annual_solar_data(
+                latitude=latitude,
+                longitude=longitude,
+                year=REFERENCE_YEAR,
+                interval_minutes=int(resolution),
+                ghi_threshold=float(ghi_threshold),
+            )
+
+        relevant = data[data["above_ghi_threshold"]]
+        daylight = data[data["apparent_elevation"] > 0]
+        annual_ghi = data["ghi"].sum() * float(resolution) / 60 / 1000
+
+        st.subheader("Site parameters")
+        st.dataframe(
+            {
+                "Parameter": ["Annual clear-sky GHI", "Maximum clear-sky GHI", "Minimum clear-sky GHI"],
+                "Value": [
+                    f"{annual_ghi:,.1f} kWh/m²",
+                    f"{data['ghi'].max():,.1f} W/m²",
+                    f"{data['ghi'].min():,.1f} W/m²",
+                ],
+            },
+            hide_index=True,
+            width="stretch",
         )
-        .properties(height=360)
-    )
-    st.altair_chart(heatmap, width="stretch")
 
-    with st.expander("Preview calculated data"):
-        st.dataframe(data.head(100), width="stretch")
+        st.subheader("Annual result")
+        a, b, c = st.columns(3)
+        a.metric("Daylight timestamps", f"{len(daylight):,}")
+        b.metric("Above GHI threshold", f"{len(relevant):,}")
+        c.metric("Equivalent selected hours", f"{len(relevant) * resolution / 60:,.1f} h")
 
-    st.download_button(
-        "Download annual CSV",
-        data=data.to_csv().encode("utf-8"),
-        file_name=f"clear_sky_{latitude:.4f}_{longitude:.4f}_{resolution}min.csv",
-        mime="text/csv",
-    )
+        st.subheader("Average clear-sky GHI by month and hour")
+        ghi_matrix, timezone_name, utc_offset = monthly_hourly_ghi_matrix(data, latitude, longitude)
+        heatmap_data = (
+            ghi_matrix.rename_axis("Month")
+            .reset_index()
+            .melt(id_vars="Month", var_name="Hour", value_name="Average GHI")
+        )
+        heatmap = (
+            alt.Chart(heatmap_data)
+            .mark_rect()
+            .encode(
+                x=alt.X("Hour:O", title="Hour of day", sort=list(range(24))),
+                y=alt.Y("Month:N", title=None, sort=list(ghi_matrix.index)),
+                color=alt.Color(
+                    "Average GHI:Q",
+                    title="GHI (W/m²)",
+                    scale=alt.Scale(range=["#f4faf6", "#9bd4b1", "#1e8e5a", "#0b2942"]),
+                ),
+                tooltip=[
+                    alt.Tooltip("Month:N"),
+                    alt.Tooltip("Hour:O", title="Local standard hour"),
+                    alt.Tooltip("Average GHI:Q", title="Average GHI", format=".1f"),
+                ],
+            )
+            .properties(height=360)
+        )
+        st.altair_chart(heatmap, width="stretch")
 
-    offset_label = f"UTC{utc_offset:+g}"
-    st.caption(
-        f"Time basis: local standard time ({timezone_name}, {offset_label}). "
-        "Daylight saving time is not considered."
-    )
+        with st.expander("Preview calculated data"):
+            st.dataframe(data.head(100), width="stretch")
+
+        st.download_button(
+            "Download annual CSV",
+            data=data.to_csv().encode("utf-8"),
+            file_name=f"clear_sky_{latitude:.4f}_{longitude:.4f}_{resolution}min.csv",
+            mime="text/csv",
+        )
+
+        offset_label = f"UTC{utc_offset:+g}"
+        st.caption(
+            f"Time basis: local standard time ({timezone_name}, {offset_label}). "
+            "Daylight saving time is not considered."
+        )
+
+with objects_tab:
+    st.info("Object definition will be added in the next development step.")
+
+with shadow_tab:
+    st.info("Shadow calculations will be added after the object definition.")
+
+with export_tab:
+    st.info("KMZ and DWG export options will be added in a later step.")
