@@ -312,9 +312,11 @@ def open_object_form(item: dict | None = None, index: int | None = None) -> None
     st.session_state.object_latitude = float(item.get("latitude", st.session_state.latitude))
     st.session_state.object_longitude = float(item.get("longitude", st.session_state.longitude))
     st.session_state.object_azimuth = float(item.get("azimuth_deg", 90.0))
-    st.session_state.mast_radius = float(item.get("mast_radius_m", 3.0))
-    st.session_state.mast_height = float(item.get("mast_height_m", 120.0))
-    st.session_state.blade_length = float(item.get("blade_length_m", 70.0))
+    # Turbine-specific widget keys prevent Streamlit from reusing stale values
+    # when the object-type selector changes from Cuboid to Wind turbine.
+    st.session_state.turbine_mast_radius = float(item.get("mast_radius_m", 3.0))
+    st.session_state.turbine_mast_height = float(item.get("mast_height_m", 120.0))
+    st.session_state.turbine_blade_length = float(item.get("blade_length_m", 70.0))
 
 
 def edit_saved_object(object_id: str) -> None:
@@ -339,6 +341,12 @@ def delete_saved_object(object_id: str) -> None:
     st.session_state.object_map_revision = (
         st.session_state.get("object_map_revision", 0) + 1
     )
+
+
+def reset_project() -> None:
+    """Clear the current study and return to a clean main menu."""
+    st.session_state.clear()
+    st.query_params.clear()
 
 
 def render_cuboid_preview(vertices, dimensions) -> None:
@@ -686,6 +694,25 @@ if active_page == "Home":
     st.caption("Select a study area to begin")
     render_navigation(home=True)
 
+    new_project_col, spacer_col = st.columns([1, 3])
+    with new_project_col:
+        if st.button("New project", type="secondary", width="stretch"):
+            st.session_state.confirm_new_project = True
+    if st.session_state.get("confirm_new_project", False):
+        st.warning(
+            "Start a new project? This will clear the current site, objects, "
+            "shadow results and completion status."
+        )
+        confirm_col, cancel_col, _ = st.columns([1, 1, 2])
+        if confirm_col.button(
+            "Clear and start", type="primary", width="stretch",
+            on_click=reset_project,
+        ):
+            st.rerun()
+        if cancel_col.button("Cancel", width="stretch"):
+            st.session_state.confirm_new_project = False
+            st.rerun()
+
     with st.expander("Instructions"):
         st.caption("Instructions will be added as the workflow is developed.")
 
@@ -873,15 +900,15 @@ elif active_page == "Object Generation":
                 st.markdown("##### Turbine dimensions")
                 mast_radius = st.number_input(
                     "Mast radius (m)", min_value=0.05, step=0.1,
-                    key="mast_radius",
+                    key="turbine_mast_radius",
                 )
                 mast_height = st.number_input(
                     "Mast height / hub height (m)", min_value=0.1,
-                    step=1.0, key="mast_height",
+                    step=1.0, key="turbine_mast_height",
                 )
                 blade_length = st.number_input(
                     "Blade length (m)", min_value=0.1, step=1.0,
-                    key="blade_length",
+                    key="turbine_blade_length",
                 )
                 upper_tip_height = mast_height + blade_length
                 st.metric("Calculated upper blade-tip height", f"{upper_tip_height:g} m")
