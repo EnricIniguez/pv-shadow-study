@@ -51,10 +51,8 @@ class LiveMoveHandle(MacroElement):
         const originMarker = {{ this.origin_marker.get_name() }};
         const moveMetadata = document.createElement('span');
         moveMetadata.innerText = 'MOVE||{{ this.object_id }}';
-        moveMarker._popup = {
-            _content: moveMetadata,
-            getContent: function() { return moveMetadata; }
-        };
+        moveMarker._popup = L.popup({autoClose: false, closeOnClick: false})
+            .setContent(moveMetadata);
         let moveStart = null;
         let polygonStart = null;
         let originStart = null;
@@ -113,10 +111,8 @@ class LiveRotateHandle(MacroElement):
         const widthY = {{ this.width_y }};
         const rotateMetadata = document.createElement('span');
         rotateMetadata.innerText = 'ROTATE||{{ this.object_id }}';
-        rotateMarker._popup = {
-            _content: rotateMetadata,
-            getContent: function() { return rotateMetadata; }
-        };
+        rotateMarker._popup = L.popup({autoClose: false, closeOnClick: false})
+            .setContent(rotateMetadata);
         let fixedOrigin = null;
 
         function destination(origin, distance, bearingDegrees) {
@@ -691,6 +687,8 @@ elif active_page == "Object Generation":
     st.caption("Define and preview the objects that will cast shadows")
     if "objects" not in st.session_state:
         st.session_state.objects = []
+    if "object_map_revision" not in st.session_state:
+        st.session_state.object_map_revision = 0
 
     action_col, count_col = st.columns([1, 3])
     with action_col:
@@ -798,6 +796,7 @@ elif active_page == "Object Generation":
                         st.session_state.objects.append(saved_object)
                     else:
                         st.session_state.objects[editing_index] = saved_object
+                    st.session_state.object_map_revision += 1
                     st.session_state.object_completed = True
                     st.session_state.object_form_visible = False
                     st.session_state.editing_object_index = None
@@ -829,6 +828,7 @@ elif active_page == "Object Generation":
                     ):
                         st.session_state.objects.pop(index)
                         st.session_state.object_completed = bool(st.session_state.objects)
+                        st.session_state.object_map_revision += 1
                         st.rerun()
 
         with map_col:
@@ -914,7 +914,8 @@ elif active_page == "Object Generation":
                 object_map.fit_bounds(all_footprint_points, padding=(35, 35))
             Fullscreen(position="topright").add_to(object_map)
             object_map_state = st_folium(
-                object_map, key="saved_objects_map",
+                object_map,
+                key=f"saved_objects_map_{st.session_state.object_map_revision}",
                 height=560, use_container_width=True,
                 returned_objects=[
                     "last_object_clicked",
@@ -955,6 +956,7 @@ elif active_page == "Object Generation":
                         old_centre = footprint_center(old_footprint)
                         selected["latitude"] += handle_position["lat"] - old_centre[0]
                         selected["longitude"] += handle_position["lng"] - old_centre[1]
+                        st.session_state.object_map_revision += 1
                         st.rerun()
                     if selected is not None and action_label == "ROTATE":
                         displacement = abs(handle_position["lat"] - selected["latitude"]) + abs(
@@ -965,6 +967,7 @@ elif active_page == "Object Generation":
                                 selected["latitude"], selected["longitude"],
                                 handle_position["lat"], handle_position["lng"],
                             )
+                            st.session_state.object_map_revision += 1
                             st.rerun()
 
 elif active_page in ("Shadow Study", "Export Results"):
