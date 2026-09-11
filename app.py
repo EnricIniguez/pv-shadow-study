@@ -364,7 +364,8 @@ def render_navigation(home: bool = False) -> None:
         ("Site Creation", "📍", "site", site_complete, True),
         ("Object Generation", "🧊", "objects", object_complete, True),
         ("Shadow Study", "🌤️", "shadow", shadow_complete, True),
-        ("Export Results", "📦", "export", export_unlocked, export_unlocked),
+        # Export is an available action, not a workflow step to complete.
+        ("Export Results", "📦", "export", False, export_unlocked),
     ]
     columns = st.columns(2 if home else 4, gap="medium")
     key_context = "home" if home else str(st.query_params.get("page", "workspace"))
@@ -682,9 +683,13 @@ def render_wind_turbine_preview(
 def render_completion_notice() -> None:
     """Show a one-time completion toast and play a short confirmation tone."""
     completed_page = st.session_state.pop("completion_notice", None)
-    if not completed_page:
+    export_ready = st.session_state.pop("export_ready_notice", False)
+    if not completed_page and not export_ready:
         return
-    st.toast(f"{completed_page} has been completed", icon="✅")
+    if completed_page:
+        st.toast(f"{completed_page} has been completed", icon="✅")
+    if export_ready:
+        st.toast("Results may now be exported", icon="📦")
     components.html(
         """
         <script>
@@ -1619,6 +1624,7 @@ elif active_page == "Shadow Study":
         st.session_state.shadow_completed = True
         if not was_complete:
             st.session_state.completion_notice = "Shadow Study"
+            st.session_state.export_ready_notice = True
         st.rerun()
 
     if objects:
