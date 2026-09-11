@@ -11,7 +11,7 @@ irradiance data from latitude and longitude.
 - Solar azimuth and apparent elevation calculated with pvlib
 - Ineichen clear-sky GHI, DNI and DHI
 - Configurable clear-sky GHI threshold
-- Monthly summary and CSV download
+- Annual summary and CSV download
 
 All timestamps are currently calculated and exported in UTC. Local time-zone
 handling will be added when the geographic/map workflow is expanded.
