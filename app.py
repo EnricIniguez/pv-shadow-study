@@ -300,6 +300,7 @@ def open_object_form(item: dict | None = None, index: int | None = None) -> None
     object_type = item.get("type", "Cuboid")
     st.session_state.object_form_visible = True
     st.session_state.editing_object_index = index
+    st.session_state.editing_object_id = None if is_new else item["id"]
     st.session_state.object_type = object_type
     st.session_state.new_object_type_last = object_type
     st.session_state.object_name = (
@@ -311,9 +312,33 @@ def open_object_form(item: dict | None = None, index: int | None = None) -> None
     st.session_state.object_latitude = float(item.get("latitude", st.session_state.latitude))
     st.session_state.object_longitude = float(item.get("longitude", st.session_state.longitude))
     st.session_state.object_azimuth = float(item.get("azimuth_deg", 90.0))
-    st.session_state.mast_radius = float(item.get("mast_radius_m", 2.5))
-    st.session_state.mast_height = float(item.get("mast_height_m", 100.0))
-    st.session_state.blade_length = float(item.get("blade_length_m", 60.0))
+    st.session_state.mast_radius = float(item.get("mast_radius_m", 3.0))
+    st.session_state.mast_height = float(item.get("mast_height_m", 120.0))
+    st.session_state.blade_length = float(item.get("blade_length_m", 70.0))
+
+
+def edit_saved_object(object_id: str) -> None:
+    """Open the requested object by stable ID rather than list position."""
+    for index, item in enumerate(st.session_state.get("objects", [])):
+        if item["id"] == object_id:
+            open_object_form(item, index)
+            return
+
+
+def delete_saved_object(object_id: str) -> None:
+    """Delete exactly one requested object while preserving every other object."""
+    st.session_state.objects = [
+        item for item in st.session_state.get("objects", [])
+        if item["id"] != object_id
+    ]
+    if st.session_state.get("editing_object_id") == object_id:
+        st.session_state.object_form_visible = False
+        st.session_state.editing_object_index = None
+        st.session_state.editing_object_id = None
+    st.session_state.object_completed = bool(st.session_state.objects)
+    st.session_state.object_map_revision = (
+        st.session_state.get("object_map_revision", 0) + 1
+    )
 
 
 def render_cuboid_preview(vertices, dimensions) -> None:
@@ -473,7 +498,7 @@ def render_wind_turbine_preview(
         textfont=dict(size=13, color="#16324a"), hoverinfo="skip",
         showlegend=False,
     ))
-    extent = max(upper_height, blade_length * 2)
+    horizontal_extent = blade_length * 1.12
     figure.update_layout(
         height=650, margin=dict(l=0, r=0, t=15, b=0),
         paper_bgcolor="rgba(255,255,255,0.76)", showlegend=False,
@@ -481,7 +506,8 @@ def render_wind_turbine_preview(
             xaxis_title="X · East (m)", yaxis_title="Y · North (m)",
             zaxis_title="Height (m)", aspectmode="data",
             camera=dict(eye=dict(x=1.55, y=1.7, z=1.05)),
-            xaxis=dict(range=[-extent * 0.55, extent * 0.55]),
+            xaxis=dict(range=[-horizontal_extent, horizontal_extent]),
+            yaxis=dict(range=[-blade_length * 0.38, blade_length * 0.45]),
             zaxis=dict(range=[0, upper_height * 1.08]),
         ),
     )
@@ -884,6 +910,8 @@ elif active_page == "Object Generation":
 
             if cancel_clicked:
                 st.session_state.object_form_visible = False
+                st.session_state.editing_object_index = None
+                st.session_state.editing_object_id = None
                 st.rerun()
             if save_clicked:
                 clean_name = st.session_state.object_name.strip()
@@ -897,10 +925,7 @@ elif active_page == "Object Generation":
                     st.error("Object names must be unique.")
                 else:
                     saved_object = {
-                        "id": (
-                            st.session_state.objects[editing_index]["id"]
-                            if editing_index is not None else str(uuid.uuid4())
-                        ),
+                        "id": st.session_state.get("editing_object_id") or str(uuid.uuid4()),
                         "name": clean_name,
                         "type": "Wind turbine",
                         "mast_radius_m": float(mast_radius),
@@ -911,14 +936,19 @@ elif active_page == "Object Generation":
                         "longitude": float(object_longitude),
                     }
                     was_complete = bool(st.session_state.objects)
-                    if editing_index is None:
+                    editing_object_id = st.session_state.get("editing_object_id")
+                    if editing_object_id is None:
                         st.session_state.objects.append(saved_object)
                     else:
-                        st.session_state.objects[editing_index] = saved_object
+                        st.session_state.objects = [
+                            saved_object if item["id"] == editing_object_id else item
+                            for item in st.session_state.objects
+                        ]
                     st.session_state.object_map_revision += 1
                     st.session_state.object_completed = True
                     st.session_state.object_form_visible = False
                     st.session_state.editing_object_index = None
+                    st.session_state.editing_object_id = None
                     if not was_complete:
                         st.session_state.completion_notice = "Object Generation"
                     st.rerun()
@@ -974,6 +1004,8 @@ elif active_page == "Object Generation":
 
             if cancel_clicked:
                 st.session_state.object_form_visible = False
+                st.session_state.editing_object_index = None
+                st.session_state.editing_object_id = None
                 st.rerun()
             if save_clicked:
                 clean_name = st.session_state.object_name.strip()
@@ -987,10 +1019,7 @@ elif active_page == "Object Generation":
                     st.error("Object names must be unique.")
                 else:
                     saved_object = {
-                        "id": (
-                            st.session_state.objects[editing_index]["id"]
-                            if editing_index is not None else str(uuid.uuid4())
-                        ),
+                        "id": st.session_state.get("editing_object_id") or str(uuid.uuid4()),
                         "name": clean_name,
                         "type": "Cuboid",
                         "length_x_m": float(cuboid_x),
@@ -1001,14 +1030,19 @@ elif active_page == "Object Generation":
                         "azimuth_deg": float(azimuth),
                     }
                     was_complete = bool(st.session_state.objects)
-                    if editing_index is None:
+                    editing_object_id = st.session_state.get("editing_object_id")
+                    if editing_object_id is None:
                         st.session_state.objects.append(saved_object)
                     else:
-                        st.session_state.objects[editing_index] = saved_object
+                        st.session_state.objects = [
+                            saved_object if item["id"] == editing_object_id else item
+                            for item in st.session_state.objects
+                        ]
                     st.session_state.object_map_revision += 1
                     st.session_state.object_completed = True
                     st.session_state.object_form_visible = False
                     st.session_state.editing_object_index = None
+                    st.session_state.editing_object_id = None
                     if not was_complete:
                         st.session_state.completion_notice = "Object Generation"
                     st.rerun()
@@ -1037,16 +1071,14 @@ elif active_page == "Object Generation":
                         f"Origin: {item['latitude']:.5f}, {item['longitude']:.5f}"
                     )
                     edit_col, delete_col = st.columns(2)
-                    if edit_col.button("Edit", key=f"edit_{item['id']}", width="stretch"):
-                        open_object_form(item, index)
-                        st.rerun()
-                    if delete_col.button(
-                        "Delete", key=f"delete_{item['id']}", width="stretch"
-                    ):
-                        st.session_state.objects.pop(index)
-                        st.session_state.object_completed = bool(st.session_state.objects)
-                        st.session_state.object_map_revision += 1
-                        st.rerun()
+                    edit_col.button(
+                        "Edit", key=f"edit_{item['id']}", width="stretch",
+                        on_click=edit_saved_object, args=(item["id"],),
+                    )
+                    delete_col.button(
+                        "Delete", key=f"delete_{item['id']}", width="stretch",
+                        on_click=delete_saved_object, args=(item["id"],),
+                    )
 
         with map_col:
             st.subheader("Object locations")
