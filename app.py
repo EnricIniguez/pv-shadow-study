@@ -1564,7 +1564,8 @@ elif active_page == "Shadow Study":
             key="shadow_ghi_threshold",
         )
         st.caption(
-            "15 minutes is fastest. Use 1 minute for the final high-resolution study."
+            "The selected step controls irradiance screening and affected-hours totals. "
+            "The external boundary is automatically refined at one-minute resolution."
         )
         calculate_shadow = st.button(
             "Calculate shadow area", type="primary", width="stretch",
