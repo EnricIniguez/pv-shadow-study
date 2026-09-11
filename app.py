@@ -49,6 +49,12 @@ class LiveMoveHandle(MacroElement):
         const moveMarker = {{ this.marker.get_name() }};
         const movePolygon = {{ this.polygon.get_name() }};
         const originMarker = {{ this.origin_marker.get_name() }};
+        const moveMetadata = document.createElement('span');
+        moveMetadata.innerText = 'MOVE||{{ this.object_id }}';
+        moveMarker._popup = {
+            _content: moveMetadata,
+            getContent: function() { return moveMetadata; }
+        };
         let moveStart = null;
         let polygonStart = null;
         let originStart = null;
@@ -85,11 +91,12 @@ class LiveMoveHandle(MacroElement):
         """
     )
 
-    def __init__(self, marker, polygon, origin_marker):
+    def __init__(self, marker, polygon, origin_marker, object_id):
         super().__init__()
         self.marker = marker
         self.polygon = polygon
         self.origin_marker = origin_marker
+        self.object_id = object_id
 
 
 class LiveRotateHandle(MacroElement):
@@ -104,6 +111,12 @@ class LiveRotateHandle(MacroElement):
         const centreMarker = {{ this.centre_marker.get_name() }};
         const lengthX = {{ this.length_x }};
         const widthY = {{ this.width_y }};
+        const rotateMetadata = document.createElement('span');
+        rotateMetadata.innerText = 'ROTATE||{{ this.object_id }}';
+        rotateMarker._popup = {
+            _content: rotateMetadata,
+            getContent: function() { return rotateMetadata; }
+        };
         let fixedOrigin = null;
 
         function destination(origin, distance, bearingDegrees) {
@@ -164,13 +177,14 @@ class LiveRotateHandle(MacroElement):
         """
     )
 
-    def __init__(self, marker, polygon, centre_marker, length_x, width_y):
+    def __init__(self, marker, polygon, centre_marker, length_x, width_y, object_id):
         super().__init__()
         self.marker = marker
         self.polygon = polygon
         self.centre_marker = centre_marker
         self.length_x = float(length_x)
         self.width_y = float(width_y)
+        self.object_id = object_id
 
 
 PAGES = ("Site Creation", "Object Generation", "Shadow Study", "Export Results")
@@ -850,7 +864,7 @@ elif active_page == "Object Generation":
                 move_handle = folium.Marker(
                     centre,
                     draggable=True,
-                    tooltip=f"Move object: {safe_name}",
+                    tooltip=safe_name,
                     icon=folium.DivIcon(
                         icon_size=(34, 34), icon_anchor=(17, 17),
                         html=(
@@ -865,7 +879,7 @@ elif active_page == "Object Generation":
                 rotation_handle = folium.Marker(
                     [item["latitude"], item["longitude"]],
                     draggable=True,
-                    tooltip=f"Rotate object: {safe_name}",
+                    tooltip=safe_name,
                     icon=folium.DivIcon(
                         icon_size=(28, 28), icon_anchor=(14, 14),
                         html=(
@@ -882,7 +896,9 @@ elif active_page == "Object Generation":
                 move_handle.add_to(object_map)
                 rotation_handle.add_to(object_map)
                 object_map.add_child(
-                    LiveMoveHandle(move_handle, object_polygon, rotation_handle)
+                    LiveMoveHandle(
+                        move_handle, object_polygon, rotation_handle, item["id"]
+                    )
                 )
                 object_map.add_child(
                     LiveRotateHandle(
@@ -891,6 +907,7 @@ elif active_page == "Object Generation":
                         move_handle,
                         item["length_x_m"],
                         item["width_y_m"],
+                        item["id"],
                     )
                 )
             if all_footprint_points:
@@ -901,24 +918,22 @@ elif active_page == "Object Generation":
                 height=560, use_container_width=True,
                 returned_objects=[
                     "last_object_clicked",
-                    "last_object_clicked_tooltip",
+                    "last_object_clicked_popup",
                 ],
             )
             handle_position = (
                 object_map_state.get("last_object_clicked")
                 if object_map_state else None
             )
-            handle_tooltip = (
-                object_map_state.get("last_object_clicked_tooltip")
+            handle_metadata = (
+                object_map_state.get("last_object_clicked_popup")
                 if object_map_state else None
             )
-            if handle_position and handle_tooltip and handle_tooltip.startswith(
-                ("Move object: ", "Rotate object: ")
-            ):
-                action_label, object_name = handle_tooltip.split(": ", 1)
+            if handle_position and handle_metadata and "||" in handle_metadata:
+                action_label, object_id = handle_metadata.split("||", 1)
                 event_signature = (
                     action_label,
-                    object_name,
+                    object_id,
                     round(handle_position["lat"], 7),
                     round(handle_position["lng"], 7),
                 )
@@ -927,11 +942,11 @@ elif active_page == "Object Generation":
                     selected = next(
                         (
                             item for item in st.session_state.objects
-                            if item["name"] == object_name
+                            if item["id"] == object_id
                         ),
                         None,
                     )
-                    if selected is not None and action_label == "Move object":
+                    if selected is not None and action_label == "MOVE":
                         old_footprint = cuboid_footprint_latlon(
                             selected["latitude"], selected["longitude"],
                             selected["length_x_m"], selected["width_y_m"],
@@ -941,7 +956,7 @@ elif active_page == "Object Generation":
                         selected["latitude"] += handle_position["lat"] - old_centre[0]
                         selected["longitude"] += handle_position["lng"] - old_centre[1]
                         st.rerun()
-                    if selected is not None and action_label == "Rotate object":
+                    if selected is not None and action_label == "ROTATE":
                         displacement = abs(handle_position["lat"] - selected["latitude"]) + abs(
                             handle_position["lng"] - selected["longitude"]
                         )
