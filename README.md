@@ -6,7 +6,7 @@ irradiance data from latitude and longitude.
 ## Current features
 
 - Latitude and longitude inputs with coordinate validation
-- Interactive satellite map with click-to-select coordinates
+- Interactive satellite map with click-to-select and draggable coordinates
 - 1, 5 or 15-minute annual time series
 - Solar azimuth and apparent elevation calculated with pvlib
 - Ineichen clear-sky GHI, DNI and DHI
