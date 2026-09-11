@@ -62,10 +62,20 @@ st.caption("Clear-sky solar data for the selected location")
 with st.sidebar:
     st.header("Study location")
     latitude = st.number_input(
-        "Latitude (°)", min_value=-90.0, max_value=90.0, step=0.0001, key="latitude"
+        "Latitude (°)",
+        min_value=-90.0,
+        max_value=90.0,
+        step=0.00001,
+        format="%.5f",
+        key="latitude",
     )
     longitude = st.number_input(
-        "Longitude (°)", min_value=-180.0, max_value=180.0, step=0.0001, key="longitude"
+        "Longitude (°)",
+        min_value=-180.0,
+        max_value=180.0,
+        step=0.00001,
+        format="%.5f",
+        key="longitude",
     )
     year = st.number_input("Year", min_value=2000, max_value=2100, value=2026, step=1)
     resolution = st.selectbox("Time step", options=[1, 5, 15], index=1, format_func=lambda x: f"{x} min")
