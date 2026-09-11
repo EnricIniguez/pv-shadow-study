@@ -46,7 +46,11 @@ class SyncObjectHandle(MacroElement):
         """
         {% macro script(this, kwargs) %}
         {{ this._parent.get_name() }}.on('dragend', function() {
-            {{ this._parent.get_name() }}.fire('click');
+            const marker = {{ this._parent.get_name() }};
+            marker.fire('click', {
+                latlng: marker.getLatLng(),
+                sourceTarget: marker
+            });
         });
         {% endmacro %}
         """
@@ -713,29 +717,28 @@ elif active_page == "Object Generation":
                 )
                 all_footprint_points.extend(footprint)
                 centre = footprint_center(footprint)
+                safe_name = escape(item["name"])
                 folium.Polygon(
                     locations=footprint,
                     color="#1f6f55", weight=3,
                     fill=True, fill_color="#9fc8ba", fill_opacity=0.48,
-                    tooltip=item["name"],
+                    tooltip=safe_name,
                 ).add_to(object_map)
-                safe_name = escape(item["name"])
                 move_handle = folium.Marker(
                     centre,
                     draggable=True,
-                    tooltip=f"Move {item['name']}||{item['id']}",
+                    tooltip=folium.Tooltip(
+                        "Move object"
+                        f'<span style="display:none">||MOVE||{item["id"]}</span>'
+                    ),
                     icon=folium.DivIcon(
                         icon_size=(34, 34), icon_anchor=(17, 17),
                         html=(
-                            '<div style="position:relative;width:34px;height:34px;cursor:move">'
+                            '<div style="width:34px;height:34px;cursor:move">'
                             '<div style="width:30px;height:30px;border-radius:50%;'
                             'background:#fffdf9;border:2px solid #1f6f55;color:#1f6f55;'
                             'display:flex;align-items:center;justify-content:center;'
-                            'font-size:20px;font-weight:800;box-shadow:0 2px 7px #0004">✥</div>'
-                            f'<div style="position:absolute;top:35px;left:50%;transform:translateX(-50%);'
-                            'white-space:nowrap;background:#fffdf9e8;border:1px solid #1f6f55;'
-                            'border-radius:5px;padding:2px 6px;color:#16324a;font-size:12px;'
-                            f'font-weight:700;pointer-events:none">{safe_name}</div></div>'
+                            'font-size:20px;font-weight:800;box-shadow:0 2px 7px #0004">✥</div></div>'
                         ),
                     ),
                 )
@@ -745,7 +748,10 @@ elif active_page == "Object Generation":
                 rotation_handle = folium.Marker(
                     [item["latitude"], item["longitude"]],
                     draggable=True,
-                    tooltip=f"Rotate {item['name']}||{item['id']}",
+                    tooltip=folium.Tooltip(
+                        "Rotate object"
+                        f'<span style="display:none">||ROTATE||{item["id"]}</span>'
+                    ),
                     icon=folium.DivIcon(
                         icon_size=(28, 28), icon_anchor=(14, 14),
                         html=(
@@ -780,8 +786,8 @@ elif active_page == "Object Generation":
                 object_map_state.get("last_object_clicked_tooltip")
                 if object_map_state else None
             )
-            if handle_position and handle_tooltip and "||" in handle_tooltip:
-                action_label, object_id = handle_tooltip.rsplit("||", 1)
+            if handle_position and handle_tooltip and handle_tooltip.count("||") >= 2:
+                _, action_label, object_id = handle_tooltip.rsplit("||", 2)
                 event_signature = (
                     action_label,
                     object_id,
@@ -794,7 +800,7 @@ elif active_page == "Object Generation":
                         (item for item in st.session_state.objects if item["id"] == object_id),
                         None,
                     )
-                    if selected is not None and action_label.startswith("Move "):
+                    if selected is not None and action_label == "MOVE":
                         old_footprint = cuboid_footprint_latlon(
                             selected["latitude"], selected["longitude"],
                             selected["length_x_m"], selected["width_y_m"],
@@ -804,7 +810,7 @@ elif active_page == "Object Generation":
                         selected["latitude"] += handle_position["lat"] - old_centre[0]
                         selected["longitude"] += handle_position["lng"] - old_centre[1]
                         st.rerun()
-                    if selected is not None and action_label.startswith("Rotate "):
+                    if selected is not None and action_label == "ROTATE":
                         displacement = abs(handle_position["lat"] - selected["latitude"]) + abs(
                             handle_position["lng"] - selected["longitude"]
                         )
