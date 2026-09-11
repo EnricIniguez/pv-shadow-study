@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from math import cos, pi, radians
 
 import numpy as np
@@ -137,6 +138,7 @@ def annual_shadow_envelopes(objects: list[dict], solar_data, reference_latitude:
         previous_time = None
         previous_solid = None
         previous_rotor = None
+        daily_endpoints = {}
         for row in relevant.itertuples():
             elevation = float(row.apparent_elevation)
             azimuth = float(row.azimuth)
@@ -151,6 +153,28 @@ def annual_shadow_envelopes(objects: list[dict], solar_data, reference_latitude:
                 current_rotor = None
 
             current_time = row.Index
+            # Use a longitude-based solar-local date so daylight periods are
+            # not split merely because the source timestamps are in UTC.
+            solar_day = (
+                current_time + timedelta(hours=reference_longitude / 15.0)
+            ).date()
+            if solar_day not in daily_endpoints:
+                daily_endpoints[solar_day] = {
+                    "first_solid": current_solid,
+                    "last_solid": current_solid,
+                    "first_rotor": current_rotor,
+                    "last_rotor": current_rotor,
+                    "peak_solid": current_solid,
+                    "peak_rotor": current_rotor,
+                    "peak_elevation": elevation,
+                }
+            else:
+                daily_endpoints[solar_day]["last_solid"] = current_solid
+                daily_endpoints[solar_day]["last_rotor"] = current_rotor
+                if elevation > daily_endpoints[solar_day]["peak_elevation"]:
+                    daily_endpoints[solar_day]["peak_solid"] = current_solid
+                    daily_endpoints[solar_day]["peak_rotor"] = current_rotor
+                    daily_endpoints[solar_day]["peak_elevation"] = elevation
             contiguous = (
                 previous_time is not None
                 and nominal_step_seconds > 0
@@ -175,6 +199,34 @@ def annual_shadow_envelopes(objects: list[dict], solar_data, reference_latitude:
             previous_time = current_time
             previous_solid = current_solid
             previous_rotor = current_rotor
+
+        # Join like-for-like daily endpoints. This removes the annual row of
+        # daily teeth without ever drawing a bridge from evening to morning.
+        ordered_days = sorted(daily_endpoints)
+        for previous_day, current_day in zip(ordered_days, ordered_days[1:]):
+            if (current_day - previous_day).days != 1:
+                continue
+            previous = daily_endpoints[previous_day]
+            current = daily_endpoints[current_day]
+            solid_polygons.append(unary_union([
+                previous["first_solid"], current["first_solid"]
+            ]).convex_hull)
+            solid_polygons.append(unary_union([
+                previous["last_solid"], current["last_solid"]
+            ]).convex_hull)
+            solid_polygons.append(unary_union([
+                previous["peak_solid"], current["peak_solid"]
+            ]).convex_hull)
+            if previous["first_rotor"] is not None and current["first_rotor"] is not None:
+                rotor_polygons.append(unary_union([
+                    previous["first_rotor"], current["first_rotor"]
+                ]).convex_hull)
+                rotor_polygons.append(unary_union([
+                    previous["last_rotor"], current["last_rotor"]
+                ]).convex_hull)
+                rotor_polygons.append(unary_union([
+                    previous["peak_rotor"], current["peak_rotor"]
+                ]).convex_hull)
     solid = _union_in_batches(solid_polygons)
     rotor = _union_in_batches(rotor_polygons)
     flicker_only = rotor.difference(solid) if not rotor.is_empty else rotor
