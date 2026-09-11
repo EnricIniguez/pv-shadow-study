@@ -10,6 +10,7 @@ from solar_data import generate_annual_solar_data, monthly_hourly_ghi_matrix
 
 
 REFERENCE_YEAR = 2025
+SITE_INTERVAL_MINUTES = 15
 
 
 class SyncDraggedMarker(MacroElement):
@@ -73,7 +74,6 @@ def mark_site_complete() -> None:
     st.session_state.site_calculation_signature = (
         round(float(st.session_state.latitude), 5),
         round(float(st.session_state.longitude), 5),
-        int(st.session_state.resolution),
         float(st.session_state.ghi_threshold),
     )
     st.session_state.site_completed = True
@@ -86,7 +86,7 @@ st.markdown(
         .stApp {
             color: #16324a;
             background-color: #fffdf9;
-            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 620'%3E%3Cg fill='%23d8c3a5' fill-opacity='.10' stroke='%23b79b74' stroke-opacity='.16' stroke-width='5'%3E%3Cpath d='M390 295 C350 110 125 35 70 155 C20 270 175 335 345 325 C205 350 105 455 180 535 C255 610 355 430 390 340 Z'/%3E%3Cpath d='M410 295 C450 110 675 35 730 155 C780 270 625 335 455 325 C595 350 695 455 620 535 C545 610 445 430 410 340 Z'/%3E%3C/g%3E%3Cg fill='none' stroke='%23b79b74' stroke-opacity='.14' stroke-width='4'%3E%3Cpath d='M385 290 C290 205 190 150 85 158 M365 322 C255 300 175 265 105 215 M350 350 C270 395 225 445 185 520 M415 290 C510 205 610 150 715 158 M435 322 C545 300 625 265 695 215 M450 350 C530 395 575 445 615 520'/%3E%3Cpath d='M394 175 C355 110 315 92 280 82 M406 175 C445 110 485 92 520 82' stroke-linecap='round'/%3E%3C/g%3E%3Cpath d='M400 180 C374 220 378 405 400 455 C422 405 426 220 400 180 Z' fill='%23b79b74' fill-opacity='.13'/%3E%3Ccircle cx='400' cy='168' r='17' fill='%23b79b74' fill-opacity='.13'/%3E%3C/svg%3E");
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 650'%3E%3Cg stroke='%23806a55' stroke-width='5' stroke-linejoin='round'%3E%3Cpath d='M382 304 C323 154 186 70 75 118 C57 236 156 320 354 337 C237 340 171 390 177 474 C218 502 280 477 363 370 C329 491 273 549 209 588 C294 565 361 495 390 386 Z' fill='%23e6d7c3'/%3E%3Cpath d='M418 304 C477 154 614 70 725 118 C743 236 644 320 446 337 C563 340 629 390 623 474 C582 502 520 477 437 370 C471 491 527 549 591 588 C506 565 439 495 410 386 Z' fill='%23e6d7c3'/%3E%3Cpath d='M354 299 C304 194 213 128 113 145 C141 230 221 286 354 318 Z M446 299 C496 194 587 128 687 145 C659 230 579 286 446 318 Z' fill='%23806a55'/%3E%3Cellipse cx='277' cy='391' rx='65' ry='48' transform='rotate(-18 277 391)' fill='%23a98d70'/%3E%3Cellipse cx='523' cy='391' rx='65' ry='48' transform='rotate(18 523 391)' fill='%23a98d70'/%3E%3Cpath d='M248 462 C276 423 314 411 344 421 C326 477 289 509 244 515 Z M552 462 C524 423 486 411 456 421 C474 477 511 509 556 515 Z' fill='%23806a55'/%3E%3Cellipse cx='216' cy='438' rx='23' ry='27' fill='%23806a55'/%3E%3Cellipse cx='584' cy='438' rx='23' ry='27' fill='%23806a55'/%3E%3Cpath d='M400 289 C379 315 380 477 400 526 C420 477 421 315 400 289 Z' fill='%2364503f'/%3E%3Ccircle cx='400' cy='275' r='18' fill='%2364503f'/%3E%3Cpath d='M392 267 C369 218 340 181 321 148 M408 267 C431 218 460 181 479 148' fill='none' stroke-linecap='round'/%3E%3C/g%3E%3C/svg%3E");
             background-position: center 58%;
             background-repeat: no-repeat;
             background-size: min(56vw, 680px);
@@ -216,10 +216,7 @@ elif active_page == "Site Creation":
             "Longitude (°)", min_value=-180.0, max_value=180.0,
             step=0.00001, format="%.5f", key="longitude"
         )
-        resolution = st.selectbox(
-            "Time step", options=[1, 5, 15], index=1,
-            format_func=lambda value: f"{value} min", key="resolution"
-        )
+        st.caption("Site-data time step: 15 minutes")
         ghi_threshold = st.number_input(
             "Clear-sky GHI threshold (W/m²)", min_value=0.0,
             max_value=1400.0, value=100.0, step=10.0, key="ghi_threshold"
@@ -232,7 +229,6 @@ elif active_page == "Site Creation":
     site_signature = (
         round(float(latitude), 5),
         round(float(longitude), 5),
-        int(resolution),
         float(ghi_threshold),
     )
     previous_signature = st.session_state.get("site_calculation_signature")
@@ -246,7 +242,7 @@ elif active_page == "Site Creation":
         with st.spinner("Calculating solar position and clear-sky irradiance…"):
             data = generate_annual_solar_data(
                 latitude=latitude, longitude=longitude,
-                year=REFERENCE_YEAR, interval_minutes=int(resolution),
+                year=REFERENCE_YEAR, interval_minutes=SITE_INTERVAL_MINUTES,
                 ghi_threshold=float(ghi_threshold),
             )
         st.session_state.site_completed = True
@@ -291,11 +287,11 @@ elif active_page == "Site Creation":
         if data is None:
             st.info("Calculate the annual data to display the site parameters.")
         else:
-            annual_ghi = data["ghi"].sum() * float(resolution) / 60 / 1000
+            annual_ghi = data["ghi"].sum() * SITE_INTERVAL_MINUTES / 60 / 1000
             production_mask = data["ghi"] > 0
             affected_mask = production_mask & (data["ghi"] < float(ghi_threshold))
-            production_hours = production_mask.sum() * float(resolution) / 60
-            affected_hours = affected_mask.sum() * float(resolution) / 60
+            production_hours = production_mask.sum() * SITE_INTERVAL_MINUTES / 60
+            affected_hours = affected_mask.sum() * SITE_INTERVAL_MINUTES / 60
             affected_share = (
                 affected_hours / production_hours * 100
                 if production_hours > 0
@@ -304,12 +300,12 @@ elif active_page == "Site Creation":
             st.metric("Annual clear-sky GHI", f"{annual_ghi:,.1f} kWh/m²")
             st.metric("Maximum clear-sky GHI", f"{data['ghi'].max():,.1f} W/m²")
             st.metric(
-                "Affected hours",
+                "Affected production hours",
                 f"{affected_hours:,.1f} h",
                 help="Hours with clear-sky GHI above 0 W/m² but below the selected threshold.",
             )
             st.metric(
-                "Affected production hours",
+                "Affected production hours (%)",
                 f"{affected_share:.1f}%",
                 help="Affected hours as a percentage of all hours with clear-sky GHI above 0 W/m².",
             )
