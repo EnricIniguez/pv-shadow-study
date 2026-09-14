@@ -4,16 +4,14 @@ from __future__ import annotations
 
 from io import BytesIO, StringIO
 from math import floor
-import re
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import ezdxf
 from pyproj import CRS, Transformer
-from shapely.geometry import MultiPolygon, Point, Polygon
+from shapely.geometry import MultiPolygon, Polygon
 from shapely.ops import transform, unary_union
 
-from object_geometry import cuboid_footprint_latlon
-from shadow_geometry import latlon_to_local, local_to_latlon
+from shadow_geometry import local_to_latlon
 
 
 def _polygons(geometry):
@@ -26,74 +24,19 @@ def _polygons(geometry):
     return [part for part in geometry.geoms if isinstance(part, Polygon)]
 
 
-def _safe_name(value: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_-]+", "_", value.strip()).strip("_") or "OBJECT"
-
-
-def _object_footprint(item: dict, ref_lat: float, ref_lon: float):
-    if item["type"] == "Wind turbine":
-        east, north = latlon_to_local(
-            item["latitude"], item["longitude"], ref_lat, ref_lon
-        )
-        return Point(east, north).buffer(item["mast_radius_m"], resolution=32)
-    coordinates = cuboid_footprint_latlon(
-        item["latitude"], item["longitude"], item["length_x_m"],
-        item["width_y_m"], item["azimuth_deg"],
-    )
-    return Polygon([
-        latlon_to_local(lat, lon, ref_lat, ref_lon) for lat, lon in coordinates
-    ])
-
-
 def export_features(objects: list[dict], shadow_result: dict, ref_lat: float, ref_lon: float):
-    """Build named individual and unioned polygon features in local EN metres."""
-    shadows = {entry["id"]: entry for entry in shadow_result.get("individual", [])}
+    """Build the two project-wide export envelopes in local EN metres."""
     threshold = float(shadow_result.get("ghi_threshold", 0.0))
     restriction = f"GHI_{threshold:g}_Wm2"
 
-    def feature_name(object_name: str, area_name: str) -> str:
-        return "_".join((
-            _safe_name(object_name), _safe_name(area_name), restriction
-        ))
-
-    features = []
-    for item in objects:
-        name = item["name"]
-        features.append((
-            feature_name(name, "Object_shape"),
-            feature_name(name, "Object_shape"),
-            _object_footprint(item, ref_lat, ref_lon),
-        ))
-        result = shadows.get(item["id"])
-        if result is not None:
-            features.append((
-                feature_name(name, "Main_shadow"),
-                feature_name(name, "Main_shadow"),
-                result["solid"],
-            ))
-            if not result["flicker"].is_empty:
-                features.append((
-                    feature_name(name, "Flicker_risk"),
-                    feature_name(name, "Flicker_risk"),
-                    result["flicker"],
-                ))
-
     solid = shadow_result["solid"]
     flicker = shadow_result["flicker"]
-    features.append((
-        feature_name("Envelope", "Main_shadow"),
-        feature_name("Envelope", "Main_shadow"), solid,
-    ))
-    if not flicker.is_empty:
-        features.append((
-            feature_name("Envelope", "Flicker_risk"),
-            feature_name("Envelope", "Flicker_risk"), flicker,
-        ))
-    features.append((
-        feature_name("Envelope", "Full_area_of_effect"),
-        feature_name("Envelope", "Full_area_of_effect"),
-        unary_union([solid, flicker]),
-    ))
+    without_flickering = f"Full_effect_without_flickering_{restriction}"
+    with_flickering = f"Full_effect_with_flickering_{restriction}"
+    features = [
+        (without_flickering, without_flickering, solid),
+        (with_flickering, with_flickering, unary_union([solid, flicker])),
+    ]
     return [(name, layer, geom) for name, layer, geom in features if not geom.is_empty]
 
 
@@ -113,9 +56,13 @@ def create_kmz(features, ref_lat: float, ref_lon: float) -> bytes:
     document = SubElement(root, "Document")
     SubElement(document, "name").text = "PV Butterfly export"
     for feature_name, layer, geometry in features:
-        for index, polygon in enumerate(_polygons(geometry), start=1):
-            placemark = SubElement(document, "Placemark")
-            suffix = f" ({index})" if len(_polygons(geometry)) > 1 else ""
+        polygons = _polygons(geometry)
+        folder = SubElement(document, "Folder")
+        SubElement(folder, "name").text = layer
+        SubElement(folder, "open").text = "1"
+        for index, polygon in enumerate(polygons, start=1):
+            placemark = SubElement(folder, "Placemark")
+            suffix = f" ({index})" if len(polygons) > 1 else ""
             SubElement(placemark, "name").text = feature_name + suffix
             SubElement(placemark, "description").text = f"Layer: {layer}"
             polygon_node = SubElement(placemark, "Polygon")
