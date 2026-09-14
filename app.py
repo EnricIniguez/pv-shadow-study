@@ -2073,20 +2073,12 @@ elif active_page == "Export Results":
                 st.caption(f"DXF coordinate reference system: {projected_crs}")
         else:
             result = active_results[0]
+            st.success(
+                "Ready to export the complete project effect with and without flickering."
+            )
+
             features = export_features(
                 objects, result, reference_latitude, reference_longitude
-            )
-            individual_main = sum(
-                1 for name, _, _ in features
-                if not name.startswith("Envelope_") and "_Main_shadow_" in name
-            )
-            individual_flicker = sum(
-                1 for name, _, _ in features
-                if not name.startswith("Envelope_") and "_Flicker_risk_" in name
-            )
-            st.success(
-                f"Ready: {len(objects)} object footprints, {individual_main} individual "
-                f"main-shadow areas and {individual_flicker} individual flicker-risk areas."
             )
 
             kmz_data = create_kmz(features, reference_latitude, reference_longitude)
@@ -2125,9 +2117,9 @@ elif active_page == "Export Results":
 
         st.markdown("**Included geometry**")
         st.markdown(
-            "- One footprint for each saved object\n"
-            "- One main-shadow boundary for each object\n"
-            "- One additional flicker-risk boundary for each wind turbine\n"
-            "- Combined main shadow, combined flicker risk, and combined full area of effect\n\n"
-            "Overlapping polygons are unioned in every combined layer, so shared area is not duplicated."
+            "- **Full effect without flickering:** the complete unioned cuboid and "
+            "turbine-mast shadow envelope\n"
+            "- **Full effect with flickering:** the same envelope plus the unioned "
+            "turbine rotor swept-disc effect\n\n"
+            "Overlapping areas are geometrically unioned and counted only once."
         )
