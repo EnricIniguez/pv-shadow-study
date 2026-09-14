@@ -2,6 +2,7 @@ import altair as alt
 from copy import deepcopy
 import folium
 import hashlib
+from io import BytesIO
 import json
 from math import asin, cos, radians, sin, sqrt
 import numpy as np
@@ -10,6 +11,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 from html import escape
 import uuid
+from zipfile import ZIP_DEFLATED, ZipFile
 from branca.element import MacroElement
 from folium.plugins import Fullscreen
 from jinja2 import Template
@@ -31,6 +33,7 @@ from shadow_geometry import (
     geometry_to_latlon_rings,
     soften_envelope_boundary,
 )
+from sweep_utils import generate_sweep_thresholds, threshold_label
 
 
 REFERENCE_YEAR = 2025
@@ -502,6 +505,10 @@ def invalidate_shadow_study() -> None:
     st.session_state.shadow_completed = False
     st.session_state.pop("shadow_result", None)
     st.session_state.pop("shadow_result_signature", None)
+    st.session_state.pop("shadow_sweep_results", None)
+    st.session_state.pop("shadow_sweep_signature", None)
+    st.session_state.pop("generated_sweep_thresholds", None)
+    st.session_state.pop("confirm_sweep_study", None)
 
 
 def reset_project() -> None:
@@ -521,6 +528,95 @@ def shadow_study_signature(interval_minutes: int, ghi_threshold: float) -> str:
     }
     encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()[:16]
+
+
+def shadow_sweep_signature(thresholds: list[float]) -> str:
+    """Return a stable signature for a complete sweep configuration."""
+    payload = {
+        "site": st.session_state.get("site_calculation_signature"),
+        "objects": st.session_state.get("objects", []),
+        "interval_minutes": SHADOW_INTERVAL_MINUTES,
+        "thresholds": [float(value) for value in thresholds],
+        "result_schema": 3,
+    }
+    encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:16]
+
+
+def calculate_shadow_result(
+    objects: list[dict], solar_data, ghi_threshold: float,
+    reference_latitude: float, reference_longitude: float,
+) -> dict:
+    """Calculate and package one threshold scenario from shared solar data."""
+    scenario_data = solar_data.assign(
+        above_ghi_threshold=(solar_data["ghi"] >= float(ghi_threshold))
+    )
+    solid_shadow, flicker_risk, relevant_steps, individual_results = annual_shadow_envelopes(
+        objects,
+        scenario_data,
+        reference_latitude,
+        reference_longitude,
+        boundary_solar_data=scenario_data,
+        return_individual=True,
+    )
+    interval_minutes = SHADOW_INTERVAL_MINUTES
+    production_mask = (
+        (scenario_data["ghi"] > 0.0)
+        & (scenario_data["apparent_elevation"] > 0.0)
+    )
+    affected_mask = production_mask & (
+        scenario_data["ghi"] < float(ghi_threshold)
+    )
+    production_hours = float(production_mask.sum()) * interval_minutes / 60
+    affected_hours = float(affected_mask.sum()) * interval_minutes / 60
+    affected_share = (
+        affected_hours / production_hours * 100.0
+        if production_hours > 0 else 0.0
+    )
+    return {
+        "solid": solid_shadow,
+        "flicker": flicker_risk,
+        "individual": individual_results,
+        "solid_display": soften_envelope_boundary(
+            solid_shadow, interval_minutes, flicker=False
+        ),
+        "flicker_display": soften_envelope_boundary(
+            flicker_risk, interval_minutes, flicker=True
+        ),
+        "relevant_steps": relevant_steps,
+        "interval_minutes": interval_minutes,
+        "ghi_threshold": float(ghi_threshold),
+        "affected_hours": affected_hours,
+        "affected_share": affected_share,
+    }
+
+
+def create_sweep_export_archive(
+    results: list[dict], objects: list[dict], reference_latitude: float,
+    reference_longitude: float, export_format: str,
+) -> bytes:
+    """Bundle every sweep scenario into a threshold-labelled ZIP archive."""
+    output = BytesIO()
+    with ZipFile(output, "w", ZIP_DEFLATED) as archive:
+        for result in results:
+            threshold = threshold_label(result["ghi_threshold"])
+            features = export_features(
+                objects, result, reference_latitude, reference_longitude
+            )
+            base_name = f"pv-butterfly-results-{threshold}-Wm2"
+            if export_format == "kmz":
+                payload = create_kmz(
+                    features, reference_latitude, reference_longitude
+                )
+                archive.writestr(f"{base_name}.kmz", payload)
+            elif export_format == "dxf":
+                payload, _ = create_dxf(
+                    features, reference_latitude, reference_longitude
+                )
+                archive.writestr(f"{base_name}.dxf", payload)
+            else:
+                raise ValueError(f"Unsupported export format: {export_format}")
+    return output.getvalue()
 
 
 def add_shadow_geometry_to_map(
@@ -1585,94 +1681,221 @@ elif active_page == "Shadow Study":
                 f"Return to Object Generation and accept the over-50-km warning for: {names}."
             )
 
-    control_col, explanation_col = st.columns([0.72, 2.1], gap="large")
-    with control_col:
-        interval_minutes = SHADOW_INTERVAL_MINUTES
-        st.markdown("**Shadow time step: 1 minute**")
-        ghi_threshold = st.number_input(
-            "Clear-sky GHI threshold (W/m²)", min_value=0.0,
-            max_value=1400.0, value=100.0, step=10.0,
-            key="shadow_ghi_threshold",
-        )
-        st.caption(
-            "Shadow solar position, clear-sky GHI, affected hours and boundary geometry "
-            "are all evaluated from an independent one-minute pvlib series."
-        )
-        calculate_shadow = st.button(
-            "Calculate shadow area", type="primary", width="stretch",
-            disabled=not (site_ready and object_ready),
-        )
-    with explanation_col:
-        st.markdown(
-            "**Area interpretation**  \n"
-            "The main shadow layer contains cuboids and turbine masts. The separate "
-            "flicker-risk layer treats each turbine rotor as a continuously swept disc. "
-            "It indicates potential blade flicker and is not a full exclusion area.  \n\n"
-            "Every boundary point defining each 3D object is projected for every valid "
-            "sun position. The map displays only the resulting external envelope, not "
-            "the individual timestamp polygons or projected points."
-        )
+    study_mode = st.radio(
+        "Study mode", ["Single study", "Perform sweep"], horizontal=True,
+        key="shadow_study_mode",
+    )
+    interval_minutes = SHADOW_INTERVAL_MINUTES
+    st.caption(
+        "Every study uses an independent annual one-minute pvlib series for solar "
+        "position, clear-sky GHI, affected hours and boundary geometry."
+    )
 
-    current_signature = shadow_study_signature(interval_minutes, float(ghi_threshold))
-    if st.session_state.get("shadow_result_signature") != current_signature:
-        st.session_state.pop("shadow_result", None)
-        st.session_state.shadow_completed = False
+    calculate_shadow = False
+    run_sweep = False
+    if study_mode == "Single study":
+        control_col, explanation_col = st.columns([0.72, 2.1], gap="large")
+        with control_col:
+            ghi_threshold = st.number_input(
+                "Clear-sky GHI threshold (W/m²)", min_value=0.0,
+                max_value=1400.0, value=100.0, step=10.0,
+                key="shadow_ghi_threshold",
+            )
+            calculate_shadow = st.button(
+                "Calculate shadow area", type="primary", width="stretch",
+                disabled=not (site_ready and object_ready),
+            )
+        with explanation_col:
+            st.markdown(
+                "**Area interpretation**  \n"
+                "The main shadow layer contains cuboids and turbine masts. The separate "
+                "flicker-risk layer treats each turbine rotor as a continuously swept disc. "
+                "It indicates potential blade flicker and is not a full exclusion area.  \n\n"
+                "Every boundary point defining each 3D object is projected for every valid "
+                "sun position. The map displays only the resulting external envelope, not "
+                "the individual timestamp polygons or projected points."
+            )
 
-    if calculate_shadow:
-        with st.spinner(
-            f"Calculating the annual envelope at {interval_minutes}-minute resolution…"
-        ):
-            solar_data = generate_annual_solar_data(
-                latitude=study_latitude,
-                longitude=study_longitude,
-                year=REFERENCE_YEAR,
-                interval_minutes=int(interval_minutes),
-                ghi_threshold=float(ghi_threshold),
+        current_signature = shadow_study_signature(
+            interval_minutes, float(ghi_threshold)
+        )
+        single_result_valid = (
+            st.session_state.get("shadow_result_signature") == current_signature
+            and st.session_state.get("shadow_result") is not None
+        )
+        if not single_result_valid:
+            st.session_state.pop("shadow_result", None)
+            st.session_state.shadow_completed = False
+        else:
+            st.session_state.shadow_completed = True
+
+        if calculate_shadow:
+            with st.spinner("Calculating the annual envelope at one-minute resolution…"):
+                solar_data = generate_annual_solar_data(
+                    latitude=study_latitude,
+                    longitude=study_longitude,
+                    year=REFERENCE_YEAR,
+                    interval_minutes=interval_minutes,
+                    ghi_threshold=0.0,
+                )
+                result = calculate_shadow_result(
+                    objects, solar_data, float(ghi_threshold),
+                    study_latitude, study_longitude,
+                )
+            st.session_state.shadow_result = result
+            st.session_state.shadow_result_signature = current_signature
+            was_complete = st.session_state.get("shadow_completed", False)
+            st.session_state.shadow_completed = True
+            if not was_complete:
+                st.session_state.completion_notice = "Shadow Study"
+                st.session_state.export_ready_notice = True
+            st.rerun()
+    else:
+        input_columns = st.columns(3)
+        with input_columns[0]:
+            sweep_minimum = st.number_input(
+                "Minimum threshold (W/m²)", min_value=0.0, max_value=1400.0,
+                value=100.0, step=10.0, key="sweep_minimum_threshold",
             )
-            solid_shadow, flicker_risk, relevant_steps, individual_results = annual_shadow_envelopes(
-                objects,
-                solar_data,
-                study_latitude,
-                study_longitude,
-                boundary_solar_data=solar_data,
-                return_individual=True,
+        with input_columns[1]:
+            sweep_maximum = st.number_input(
+                "Maximum threshold (W/m²)", min_value=0.0, max_value=1400.0,
+                value=200.0, step=10.0, key="sweep_maximum_threshold",
             )
-            solid_display = soften_envelope_boundary(
-                solid_shadow, int(interval_minutes), flicker=False
+        with input_columns[2]:
+            sweep_step = st.number_input(
+                "Step (W/m²)", min_value=0.1, max_value=1400.0,
+                value=10.0, step=1.0, key="sweep_threshold_step",
             )
-            flicker_display = soften_envelope_boundary(
-                flicker_risk, int(interval_minutes), flicker=True
+
+        sweep_inputs = (
+            float(sweep_minimum), float(sweep_maximum), float(sweep_step)
+        )
+        if st.session_state.get("generated_sweep_inputs") not in (None, sweep_inputs):
+            st.session_state.pop("generated_sweep_thresholds", None)
+            st.session_state.pop("shadow_sweep_results", None)
+            st.session_state.pop("shadow_sweep_signature", None)
+            st.session_state.pop("confirm_sweep_study", None)
+            st.session_state.shadow_completed = False
+
+        if st.button("Generate sweep", type="secondary"):
+            try:
+                generated_thresholds = generate_sweep_thresholds(*sweep_inputs)
+            except ValueError as error:
+                st.error(str(error))
+            else:
+                st.session_state.generated_sweep_thresholds = generated_thresholds
+                st.session_state.generated_sweep_inputs = sweep_inputs
+                st.session_state.pop("shadow_sweep_results", None)
+                st.session_state.pop("shadow_sweep_signature", None)
+                st.session_state.pop("confirm_sweep_study", None)
+                st.session_state.shadow_completed = False
+                st.rerun()
+
+        generated_thresholds = st.session_state.get(
+            "generated_sweep_thresholds", []
+        )
+        if generated_thresholds:
+            expected_sweep_signature = shadow_sweep_signature(generated_thresholds)
+            sweep_results_valid = (
+                st.session_state.get("shadow_sweep_signature")
+                == expected_sweep_signature
+                and bool(st.session_state.get("shadow_sweep_results"))
             )
-            production_mask = (
-                (solar_data["ghi"] > 0.0)
-                & (solar_data["apparent_elevation"] > 0.0)
-            )
-            affected_mask = production_mask & (solar_data["ghi"] < float(ghi_threshold))
-            production_hours = float(production_mask.sum()) * interval_minutes / 60
-            affected_hours = float(affected_mask.sum()) * interval_minutes / 60
-            affected_share = (
-                affected_hours / production_hours * 100.0
-                if production_hours > 0 else 0.0
-            )
-        st.session_state.shadow_result = {
-            "solid": solid_shadow,
-            "flicker": flicker_risk,
-            "individual": individual_results,
-            "solid_display": solid_display,
-            "flicker_display": flicker_display,
-            "relevant_steps": relevant_steps,
-            "interval_minutes": int(interval_minutes),
-            "ghi_threshold": float(ghi_threshold),
-            "affected_hours": affected_hours,
-            "affected_share": affected_share,
-        }
-        st.session_state.shadow_result_signature = current_signature
-        was_complete = st.session_state.get("shadow_completed", False)
-        st.session_state.shadow_completed = True
-        if not was_complete:
-            st.session_state.completion_notice = "Shadow Study"
-            st.session_state.export_ready_notice = True
-        st.rerun()
+            if not sweep_results_valid:
+                st.session_state.pop("shadow_sweep_results", None)
+                st.session_state.shadow_completed = False
+            else:
+                st.session_state.shadow_completed = True
+
+            result_by_threshold = {
+                float(result["ghi_threshold"]): result
+                for result in st.session_state.get("shadow_sweep_results", [])
+            }
+            scenario_rows = []
+            for index, threshold in enumerate(generated_thresholds, start=1):
+                scenario_result = result_by_threshold.get(float(threshold))
+                row = {
+                    "Scenario": f"Scenario {index}",
+                    "Irradiance threshold": f"{threshold_label(threshold)} W/m²",
+                }
+                if scenario_result is not None:
+                    row["Main area"] = f"{scenario_result['solid'].area / 10_000:,.2f} ha"
+                    row["Flicker risk"] = f"{scenario_result['flicker'].area / 10_000:,.2f} ha"
+                scenario_rows.append(row)
+
+            table_col, arrow_col, action_col = st.columns([4.4, 0.8, 1.35], gap="medium")
+            with table_col:
+                st.dataframe(
+                    scenario_rows, hide_index=True, width="stretch",
+                    height=min(38 + 35 * len(scenario_rows), 430),
+                )
+            with arrow_col:
+                st.markdown(
+                    "<div style='height:38px'></div>"
+                    "<div style='text-align:center;font-weight:600'>More<br>production</div>"
+                    "<div style='height:245px;display:flex;align-items:center;"
+                    "justify-content:center;font-size:4rem;line-height:1'>↓</div>"
+                    "<div style='text-align:center;font-weight:600'>More<br>capacity</div>",
+                    unsafe_allow_html=True,
+                )
+            with action_col:
+                st.markdown("<div style='height:38px'></div>", unsafe_allow_html=True)
+                if st.button(
+                    "Start study", type="primary", width="stretch",
+                    disabled=not (site_ready and object_ready) or sweep_results_valid,
+                ):
+                    st.session_state.confirm_sweep_study = True
+
+            if st.session_state.get("confirm_sweep_study", False):
+                st.warning(
+                    f"The study will calculate {len(generated_thresholds)} annual "
+                    "scenarios and could take several minutes. Are you sure you want to continue?"
+                )
+                confirm_col, cancel_col, _ = st.columns([1, 1, 2])
+                run_sweep = confirm_col.button(
+                    "Accept and continue", type="primary", width="stretch"
+                )
+                if cancel_col.button("Cancel", width="stretch"):
+                    st.session_state.confirm_sweep_study = False
+                    st.rerun()
+
+            if run_sweep:
+                st.session_state.confirm_sweep_study = False
+                progress = st.progress(0, text="Generating shared one-minute solar data…")
+                solar_data = generate_annual_solar_data(
+                    latitude=study_latitude,
+                    longitude=study_longitude,
+                    year=REFERENCE_YEAR,
+                    interval_minutes=interval_minutes,
+                    ghi_threshold=0.0,
+                )
+                sweep_results = []
+                for index, threshold in enumerate(generated_thresholds, start=1):
+                    progress.progress(
+                        (index - 1) / len(generated_thresholds),
+                        text=(
+                            f"Calculating scenario {index} of {len(generated_thresholds)} "
+                            f"({threshold_label(threshold)} W/m²)…"
+                        ),
+                    )
+                    sweep_results.append(calculate_shadow_result(
+                        objects, solar_data, threshold,
+                        study_latitude, study_longitude,
+                    ))
+                progress.progress(1.0, text="Sweep calculation complete.")
+                was_complete = st.session_state.get("shadow_completed", False)
+                st.session_state.shadow_sweep_results = sweep_results
+                st.session_state.shadow_sweep_signature = expected_sweep_signature
+                st.session_state.pop("shadow_result", None)
+                st.session_state.pop("shadow_result_signature", None)
+                st.session_state.shadow_completed = True
+                if not was_complete:
+                    st.session_state.completion_notice = "Shadow Study"
+                    st.session_state.export_ready_notice = True
+                st.rerun()
+        else:
+            st.session_state.shadow_completed = False
 
     if objects:
         st.divider()
@@ -1771,66 +1994,134 @@ elif active_page == "Export Results":
         "Export every object and its annual area of effect separately, together "
         "with overlap-safe combined project boundaries."
     )
+    study_mode = st.session_state.get("shadow_study_mode", "Single study")
     result = st.session_state.get("shadow_result")
+    sweep_results = st.session_state.get("shadow_sweep_results", [])
     objects = st.session_state.get("objects", [])
-    if result is None or not result.get("individual"):
+    active_results = sweep_results if study_mode == "Perform sweep" else [result]
+    active_results = [item for item in active_results if item is not None]
+    if not active_results or any(not item.get("individual") for item in active_results):
         st.warning(
             "Run Shadow Study again to prepare the individual geometries required for export."
         )
     else:
         reference_latitude, reference_longitude = committed_site_coordinates()
-        features = export_features(
-            objects, result, reference_latitude, reference_longitude
-        )
-        individual_main = sum(
-            1 for name, _, _ in features
-            if not name.startswith("Envelope_") and "_Main_shadow_" in name
-        )
-        individual_flicker = sum(
-            1 for name, _, _ in features
-            if not name.startswith("Envelope_") and "_Flicker_risk_" in name
-        )
-        st.success(
-            f"Ready: {len(objects)} object footprints, {individual_main} individual "
-            f"main-shadow areas and {individual_flicker} individual flicker-risk areas."
-        )
+        if study_mode == "Perform sweep":
+            st.success(
+                f"Ready to export {len(active_results)} sweep scenarios from "
+                f"{threshold_label(active_results[0]['ghi_threshold'])} to "
+                f"{threshold_label(active_results[-1]['ghi_threshold'])} W/m²."
+            )
+            kmz_archive = create_sweep_export_archive(
+                active_results, objects, reference_latitude,
+                reference_longitude, "kmz",
+            )
+            dxf_archive = create_sweep_export_archive(
+                active_results, objects, reference_latitude,
+                reference_longitude, "dxf",
+            )
+            kmz_col, cad_col = st.columns(2, gap="large")
+            with kmz_col:
+                st.subheader("All KMZ scenarios")
+                st.write(
+                    "One WGS84 polygon KMZ per irradiance threshold."
+                )
+                st.download_button(
+                    "Download all KMZ files", data=kmz_archive,
+                    file_name="pv-butterfly-sweep-kmz.zip",
+                    mime="application/zip", type="primary", width="stretch",
+                )
+            with cad_col:
+                st.subheader("All DXF scenarios")
+                st.write(
+                    "One closed-polyline DXF per threshold in the site's UTM CRS."
+                )
+                st.download_button(
+                    "Download all DXF files", data=dxf_archive,
+                    file_name="pv-butterfly-sweep-dxf.zip",
+                    mime="application/zip", type="primary", width="stretch",
+                )
 
-        kmz_data = create_kmz(features, reference_latitude, reference_longitude)
-        dxf_data, projected_crs = create_dxf(
-            features, reference_latitude, reference_longitude
+            with st.expander("Download individual scenarios"):
+                for scenario_result in active_results:
+                    threshold = threshold_label(scenario_result["ghi_threshold"])
+                    features = export_features(
+                        objects, scenario_result,
+                        reference_latitude, reference_longitude,
+                    )
+                    kmz_data = create_kmz(
+                        features, reference_latitude, reference_longitude
+                    )
+                    dxf_data, projected_crs = create_dxf(
+                        features, reference_latitude, reference_longitude
+                    )
+                    label_col, kmz_col, dxf_col = st.columns([1.5, 1, 1])
+                    label_col.markdown(f"**{threshold} W/m²**")
+                    base_name = f"pv-butterfly-results-{threshold}-Wm2"
+                    kmz_col.download_button(
+                        "KMZ", data=kmz_data,
+                        file_name=f"{base_name}.kmz",
+                        mime="application/vnd.google-earth.kmz",
+                        key=f"sweep_kmz_{threshold}", width="stretch",
+                    )
+                    dxf_col.download_button(
+                        "DXF", data=dxf_data,
+                        file_name=f"{base_name}.dxf",
+                        mime="application/dxf",
+                        key=f"sweep_dxf_{threshold}", width="stretch",
+                    )
+                st.caption(f"DXF coordinate reference system: {projected_crs}")
+        else:
+            result = active_results[0]
+            features = export_features(
+                objects, result, reference_latitude, reference_longitude
+            )
+            individual_main = sum(
+                1 for name, _, _ in features
+                if not name.startswith("Envelope_") and "_Main_shadow_" in name
+            )
+            individual_flicker = sum(
+                1 for name, _, _ in features
+                if not name.startswith("Envelope_") and "_Flicker_risk_" in name
+            )
+            st.success(
+                f"Ready: {len(objects)} object footprints, {individual_main} individual "
+                f"main-shadow areas and {individual_flicker} individual flicker-risk areas."
+            )
+
+            kmz_data = create_kmz(features, reference_latitude, reference_longitude)
+            dxf_data, projected_crs = create_dxf(
+                features, reference_latitude, reference_longitude
+            )
+            threshold = threshold_label(result["ghi_threshold"])
+            base_name = f"pv-butterfly-results-{threshold}-Wm2"
+            kmz_col, cad_col = st.columns(2, gap="large")
+            with kmz_col:
+                st.subheader("KMZ polygons")
+                st.write(
+                    "WGS84 polygons grouped by feature name for Google Earth and GIS software."
+                )
+                st.download_button(
+                    "Download KMZ", data=kmz_data,
+                    file_name=f"{base_name}.kmz",
+                    mime="application/vnd.google-earth.kmz",
+                    type="primary", width="stretch",
+                )
+            with cad_col:
+                st.subheader("CAD polylines")
+                st.write(
+                    f"Closed, metre-based polylines on separate layers in {projected_crs}."
+                )
+                st.download_button(
+                    "Download DXF", data=dxf_data,
+                    file_name=f"{base_name}.dxf",
+                    mime="application/dxf", type="primary", width="stretch",
+                )
+
+        st.caption(
+            "DXF opens directly in AutoCAD and can be saved as DWG. Native DWG "
+            "generation requires a licensed external conversion service."
         )
-        kmz_col, cad_col = st.columns(2, gap="large")
-        with kmz_col:
-            st.subheader("KMZ polygons")
-            st.write(
-                "WGS84 polygons grouped by feature name for Google Earth and GIS software."
-            )
-            st.download_button(
-                "Download KMZ",
-                data=kmz_data,
-                file_name="pv_butterfly_results.kmz",
-                mime="application/vnd.google-earth.kmz",
-                type="primary",
-                width="stretch",
-            )
-        with cad_col:
-            st.subheader("CAD polylines")
-            st.write(
-                f"Closed, metre-based polylines on separate layers in {projected_crs}."
-            )
-            st.download_button(
-                "Download DXF",
-                data=dxf_data,
-                file_name="pv_butterfly_results.dxf",
-                mime="application/dxf",
-                type="primary",
-                width="stretch",
-            )
-            st.caption(
-                "DXF opens directly in AutoCAD and can be saved as DWG. Native DWG "
-                "generation requires a licensed external conversion service, which is "
-                "not included in Streamlit Community Cloud."
-            )
 
         st.markdown("**Included geometry**")
         st.markdown(
