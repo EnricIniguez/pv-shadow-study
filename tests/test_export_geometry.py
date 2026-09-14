@@ -17,8 +17,9 @@ def _fixtures():
     }]
     first = Polygon([(0, 0), (30, 0), (30, 10), (0, 10)])
     second = Polygon([(20, 0), (40, 0), (40, 10), (20, 10)])
+    flicker = Polygon([(35, 0), (50, 0), (50, 10), (35, 10)])
     shadow_result = {
-        "solid": first.union(second), "flicker": Polygon(),
+        "solid": first.union(second), "flicker": flicker,
         "ghi_threshold": 100.0,
         "individual": [{
             "id": "cuboid-1", "name": "cuboid 1", "type": "Cuboid",
@@ -28,15 +29,25 @@ def _fixtures():
     return objects, shadow_result
 
 
-def test_export_features_include_individual_and_combined_polygons():
+def test_export_features_include_only_full_effect_envelopes():
     objects, result = _fixtures()
     features = export_features(objects, result, 41.3874, 2.1686)
     names = {name for name, _, _ in features}
-    assert "cuboid_1_Object_shape_GHI_100_Wm2" in names
-    assert "cuboid_1_Main_shadow_GHI_100_Wm2" in names
-    assert "Envelope_Main_shadow_GHI_100_Wm2" in names
-    assert "Envelope_Full_area_of_effect_GHI_100_Wm2" in names
+    assert names == {
+        "Full_effect_without_flickering_GHI_100_Wm2",
+        "Full_effect_with_flickering_GHI_100_Wm2",
+    }
     assert all(name == layer for name, layer, _ in features)
+
+
+def test_full_effect_with_flickering_contains_both_areas():
+    objects, result = _fixtures()
+    features = export_features(objects, result, 41.3874, 2.1686)
+    geometries = {name: geometry for name, _, geometry in features}
+    without_flicker = geometries["Full_effect_without_flickering_GHI_100_Wm2"]
+    with_flicker = geometries["Full_effect_with_flickering_GHI_100_Wm2"]
+    assert without_flicker.equals(result["solid"])
+    assert with_flicker.equals(result["solid"].union(result["flicker"]))
 
 
 def test_kmz_contains_valid_polygon_placemarks():
@@ -47,6 +58,13 @@ def test_kmz_contains_valid_polygon_placemarks():
         root = ET.fromstring(archive.read("doc.kml"))
     namespace = {"k": "http://www.opengis.net/kml/2.2"}
     assert root.findall(".//k:Polygon", namespace)
+    folder_names = [
+        element.text for element in root.findall(".//k:Folder/k:name", namespace)
+    ]
+    assert folder_names == [
+        "Full_effect_without_flickering_GHI_100_Wm2",
+        "Full_effect_with_flickering_GHI_100_Wm2",
+    ]
 
 
 def test_dxf_contains_closed_polylines_on_separate_layers(tmp_path):
@@ -59,4 +77,10 @@ def test_dxf_contains_closed_polylines_on_separate_layers(tmp_path):
     polylines = list(document.modelspace().query("LWPOLYLINE"))
     assert polylines
     assert all(polyline.closed for polyline in polylines)
+    assert {
+        polyline.dxf.layer for polyline in polylines
+    } == {
+        "Full_effect_without_flickering_GHI_100_Wm2",
+        "Full_effect_with_flickering_GHI_100_Wm2",
+    }
     assert "32631" in crs
