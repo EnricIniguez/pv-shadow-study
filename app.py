@@ -1,4 +1,5 @@
 import altair as alt
+from copy import deepcopy
 import folium
 import hashlib
 import json
@@ -464,6 +465,32 @@ def delete_saved_object(object_id: str) -> None:
         st.session_state.editing_object_index = None
         st.session_state.editing_object_id = None
     st.session_state.object_completed = bool(st.session_state.objects)
+    st.session_state.object_map_revision = (
+        st.session_state.get("object_map_revision", 0) + 1
+    )
+    invalidate_shadow_study()
+
+
+def copy_saved_object(object_id: str) -> None:
+    """Create an independent copy of one saved object."""
+    source = next(
+        (
+            item for item in st.session_state.get("objects", [])
+            if item["id"] == object_id
+        ),
+        None,
+    )
+    if source is None:
+        return
+
+    copied_object = deepcopy(source)
+    copied_object["id"] = str(uuid.uuid4())
+    copied_object["name"] = next_object_name(source["type"])
+    st.session_state.objects.append(copied_object)
+    st.session_state.object_completed = all(
+        object_distance_is_accepted(item)
+        for item in st.session_state.objects
+    )
     st.session_state.object_map_revision = (
         st.session_state.get("object_map_revision", 0) + 1
     )
@@ -1330,10 +1357,14 @@ elif active_page == "Object Generation":
                     st.caption(
                         f"Origin: {item['latitude']:.5f}, {item['longitude']:.5f}"
                     )
-                    edit_col, delete_col = st.columns(2)
+                    edit_col, copy_col, delete_col = st.columns(3)
                     edit_col.button(
                         "Edit", key=f"edit_{item['id']}", width="stretch",
                         on_click=edit_saved_object, args=(item["id"],),
+                    )
+                    copy_col.button(
+                        "Copy", key=f"copy_{item['id']}", width="stretch",
+                        on_click=copy_saved_object, args=(item["id"],),
                     )
                     delete_col.button(
                         "Delete", key=f"delete_{item['id']}", width="stretch",
